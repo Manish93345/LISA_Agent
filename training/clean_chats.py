@@ -19,8 +19,8 @@ from docx import Document
 
 
 # ── Folder paths (relative to this script) ────────────────────────────
-RAW_DIR     = Path("data/raw")
-CLEANED_DIR = Path("data/cleaned")
+RAW_DIR     = Path("training/data/raw")
+CLEANED_DIR = Path("training/data/cleaned")
 
 
 # ── Label patterns ─────────────────────────────────────────────────────

@@ -1,39 +1,35 @@
 """
 LISA — Main Entry Point
 ========================
-Yahan se run karo:
+Usage:
     cd D:\\Study\\LISA_Agent
     python main.py
 
 Commands:
-    /mode         → current mode dekho
-    /personal     → personal mode mein switch karo
-    /professional → professional mode mein switch karo
+    /mode         → current mode + mood dekho
+    /personal     → personal mode
+    /professional → professional mode
     /remember category key value → manually kuch yaad karao
-                   example: /remember academic cgpa 9.24
-    /memories     → saari yaad ki hui cheezein dekho
-    /reset        → conversation reset karo (memory rehti hai)
-    /quit         → band karo
+    /memories     → saari memories dekho
+    /reset        → conversation reset
+    /quit         → exit
 """
 
 from core.agent       import LisaAgent
 from memory.long_term import list_all
 from config.settings  import AGENT_NAME, USER_NAME
 
+
 def print_banner():
     print("\n" + "="*55)
     print(f"   {AGENT_NAME.upper()} — Personal AI Agent")
     print("="*55)
     print(f"   Namaste {USER_NAME}! Main {AGENT_NAME} hoon.")
-    print(f"   Type /quit to exit | /mode to check mode")
+    print(f"   Type /quit to exit | /mode to check status")
     print("="*55 + "\n")
 
 
-def handle_command(cmd: str, agent: LisaAgent) -> bool:
-    """
-    Special commands handle karo.
-    Returns True agar command tha, False agar normal message tha.
-    """
+def handle_command(cmd: str, agent: LisaAgent):
     parts = cmd.strip().split(maxsplit=3)
     c     = parts[0].lower()
 
@@ -42,17 +38,17 @@ def handle_command(cmd: str, agent: LisaAgent) -> bool:
         return "EXIT"
 
     elif c == "/mode":
-        print(f"  [Current mode: {agent.get_mode().upper()}]\n")
+        print(f"  [Mode: {agent.get_mode().upper()} | Mood detected: {agent.get_mood()}]\n")
         return True
 
     elif c == "/personal":
         agent.mode = "personal"
-        print(f"  [{AGENT_NAME} ab personal mode mein hai 💬]\n")
+        print(f"  [{AGENT_NAME} ab personal mode mein hai]\n")
         return True
 
     elif c == "/professional":
         agent.mode = "professional"
-        print(f"  [{AGENT_NAME} ab professional mode mein hai 💼]\n")
+        print(f"  [{AGENT_NAME} ab professional mode mein hai]\n")
         return True
 
     elif c == "/reset":
@@ -96,14 +92,12 @@ def main():
         if not user_input:
             continue
 
-        # Check for commands
         if user_input.startswith("/"):
             result = handle_command(user_input, agent)
             if result == "EXIT":
                 break
             continue
 
-        # Normal chat
         reply = agent.chat(user_input)
         print(f"\n{AGENT_NAME}: {reply}\n")
 
