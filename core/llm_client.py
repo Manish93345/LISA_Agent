@@ -1,19 +1,19 @@
 """
-LISA — LLM Client (Groq)
-=========================
-Groq API use karta hai — free tier: 14,400 requests/day
-Model: llama-3.3-70b-versatile — fast + high quality
+LISA — LLM Client (Multi-Provider)
+====================================
+Provider change karna ho toh sirf .env mein ek line:
+    LLM_PROVIDER=cerebras   # ya groq, claude
 
-Agar API switch karna ho toh sirf yahi file badlni hai.
+Koi aur file nahi badlni.
 """
 
-from groq import Groq
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
 
 load_dotenv()
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-CHAT_MODEL = "llama-3.3-70b-versatile"
+
+PROVIDER   = os.getenv("LLM_PROVIDER", "groq").lower()
+MAX_TOKENS = 400
 
 
 def get_response(
@@ -21,36 +21,92 @@ def get_response(
     conversation_history: list,
     user_message: str
 ) -> str:
-    """
-    Groq se response lo.
-    conversation_history format: [{"role": "user"/"assistant", "content": "..."}]
-    """
-    # Build messages
-    messages = [{"role": "system", "content": system_prompt}]
+    if PROVIDER == "cerebras":
+        return _cerebras(system_prompt, conversation_history, user_message)
+    elif PROVIDER == "claude":
+        return _claude(system_prompt, conversation_history, user_message)
+    else:
+        return _groq(system_prompt, conversation_history, user_message)
 
-    # Add history (Groq uses "assistant" not "model")
-    for msg in conversation_history:
-        # Handle both Gemini format and dict format
-        if hasattr(msg, 'role'):
-            role    = "assistant" if msg.role == "model" else msg.role
-            content = msg.parts[0].text if msg.parts else ""
-        else:
+
+# ── Groq ──────────────────────────────────────────────────────────────
+
+def _groq(system_prompt, history, user_message) -> str:
+    from groq import Groq
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    try:
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in history:
             role    = "assistant" if msg.get("role") == "model" else msg.get("role", "user")
             content = msg.get("content", "")
-        messages.append({"role": role, "content": content})
+            messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_message})
 
-    # Add current message
-    messages.append({"role": "user", "content": user_message})
-
-    try:
-        response = client.chat.completions.create(
-            model       = CHAT_MODEL,
+        r = client.chat.completions.create(
+            model       = "llama-3.3-70b-versatile",
             messages    = messages,
             temperature = 0.85,
-            max_tokens  = 500,
+            max_tokens  = MAX_TOKENS,
         )
-        return response.choices[0].message.content.strip()
-
+        return r.choices[0].message.content.strip()
     except Exception as e:
-        print(f"[LLM] Error: {e}")
+        print(f"[LLM/Groq] Error: {e}")
+        return "Yaar abhi kuch technical problem aa gayi, thoda baad mein try karo."
+
+
+# ── Cerebras ──────────────────────────────────────────────────────────
+
+def _cerebras(system_prompt, history, user_message) -> str:
+    try:
+        from cerebras.cloud.sdk import Cerebras
+        client = Cerebras(api_key=os.getenv("CEREBRAS_API_KEY"))
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in history:
+            role    = "assistant" if msg.get("role") == "model" else msg.get("role", "user")
+            content = msg.get("content", "")
+            messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_message})
+
+        r = client.chat.completions.create(
+            model       = "llama3.1-8b",
+            messages    = messages,
+            temperature = 0.85,
+            max_tokens  = MAX_TOKENS,
+        )
+        return r.choices[0].message.content.strip()
+    except ImportError:
+        print("[LLM] cerebras SDK nahi hai — pip install cerebras-cloud-sdk")
+        return _groq(system_prompt, history, user_message)  # fallback
+    except Exception as e:
+        print(f"[LLM/Cerebras] Error: {e}")
+        return "Yaar abhi kuch technical problem aa gayi, thoda baad mein try karo."
+
+
+# ── Claude (Anthropic) ────────────────────────────────────────────────
+
+def _claude(system_prompt, history, user_message) -> str:
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY"))
+
+        messages = []
+        for msg in history:
+            role    = "assistant" if msg.get("role") in ("model", "assistant") else "user"
+            content = msg.get("content", "")
+            messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": user_message})
+
+        r = client.messages.create(
+            model      = "claude-haiku-4-5-20251001",
+            max_tokens = MAX_TOKENS,
+            system     = system_prompt,
+            messages   = messages,
+        )
+        return r.content[0].text.strip()
+    except ImportError:
+        print("[LLM] anthropic SDK nahi hai — pip install anthropic")
+        return _groq(system_prompt, history, user_message)
+    except Exception as e:
+        print(f"[LLM/Claude] Error: {e}")
         return "Yaar abhi kuch technical problem aa gayi, thoda baad mein try karo."

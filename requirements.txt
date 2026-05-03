@@ -1,1 +1,3 @@
 pip install sentence-transformers
+pip install yt-dlp
+pip install cerebras-cloud-sdk
