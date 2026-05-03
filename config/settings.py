@@ -65,3 +65,17 @@ USER_NAME  = "Manish"
 MODE_PERSONAL     = "personal"
 MODE_PROFESSIONAL = "professional"
 DEFAULT_MODE      = MODE_PERSONAL
+
+
+# ── Voice Settings ─────────────────────────────────────────────────────
+WHISPER_MODEL_SIZE = "small"
+ 
+# gTTS language — "hi" handles Hinglish best
+# "hi" = Hindi/Hinglish | "en" = English
+TTS_LANG = "hi"
+ 
+# Speed — gTTS mein slow=False means normal speed
+TTS_RATE = "+0%"
+ 
+# ffplay path (backup playback)
+FFPLAY_PATH = r"C:\ffmpeg\bin\ffplay.exe"

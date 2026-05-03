@@ -8,3 +8,7 @@ run.txt
 /lisajaanu
 /memory/__pycache__
 actions/__pycache__
+/voice/kokoro_models
+temp_audio.wav
+temp_tts.mp3
+/voice/__pycache__

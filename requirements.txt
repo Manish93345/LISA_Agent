@@ -1,3 +1,12 @@
 pip install sentence-transformers
 pip install yt-dlp
 pip install cerebras-cloud-sdk
+pip install openai-whisper edge-tts sounddevice soundfile pyaudio
+pip install pipwin
+pipwin install pyaudio
+pip install openai-whisper
+pip install kokoro-onnx soundfile
+pip install huggingface_hub
+pip install kokoro-onnx soundfile
+pip install gTTS pygame
+python -c "from huggingface_hub import hf_hub_download; hf_hub_download('hexgrad/Kokoro-82M', 'kokoro-v1_0.onnx', local_dir='voice/kokoro_models'); hf_hub_download('hexgrad/Kokoro-82M', 'voices.bin', local_dir='voice/kokoro_models')"
