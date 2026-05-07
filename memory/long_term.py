@@ -1,14 +1,13 @@
 """
 LISA — Long Term Memory (SQLite)
 ==================================
-Important facts yaad rakhti hai:
-- CGPA, semester info
-- Incidents jo Manish ne bataye
-- Preferences, important dates
-- Koi bhi cheez jo LISA ko "hamesha yaad" rahni chahiye
+3 types of memory:
+  1. facts     — CGPA, DOB, naam, preferences
+  2. incidents — important events jo Manish ne bataye
+  3. summaries — past session summaries
 
 Usage:
-    from memory.long_term import save_memory, get_all_memories, search_memories
+  from memory.long_term import save_memory, get_all_memories
 """
 
 import sqlite3
@@ -32,60 +31,73 @@ def _get_conn():
             UNIQUE(category, key)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            summary   TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )
+    """)
     conn.commit()
     return conn
 
 
+# ── Facts ──────────────────────────────────────────────────────────────
+
 def save_memory(category: str, key: str, value: str):
-    """
-    Ek fact save karo.
-    Example: save_memory("academic", "cgpa", "9.24")
-             save_memory("incident", "divya_unfriend", "Divya ne Oct 2025 mein unfriend kiya...")
-    """
     conn = _get_conn()
     conn.execute("""
         INSERT INTO memories (category, key, value, timestamp)
         VALUES (?, ?, ?, ?)
-        ON CONFLICT(category, key) DO UPDATE SET value=excluded.value, timestamp=excluded.timestamp
+        ON CONFLICT(category, key)
+        DO UPDATE SET value=excluded.value, timestamp=excluded.timestamp
     """, (category, key, value, datetime.now().isoformat()))
     conn.commit()
     conn.close()
 
 
 def get_all_memories() -> str:
-    """
-    Saari memories ek formatted string mein return karo.
-    Ye LISA ke system prompt mein inject hogi.
-    """
-    conn = _get_conn()
-    rows = conn.execute(
+    conn  = _get_conn()
+    rows  = conn.execute(
         "SELECT category, key, value FROM memories ORDER BY category, key"
+    ).fetchall()
+
+    # Last 5 session summaries
+    sums  = conn.execute(
+        "SELECT summary, timestamp FROM sessions ORDER BY id DESC LIMIT 5"
     ).fetchall()
     conn.close()
 
-    if not rows:
+    if not rows and not sums:
         return ""
 
-    lines = ["[Manish ke baare mein important facts — inhe hamesha yaad rakho]\n"]
-    current_cat = None
-    for cat, key, val in rows:
-        if cat != current_cat:
-            lines.append(f"\n{cat.upper()}:")
-            current_cat = cat
-        lines.append(f"  - {key}: {val}")
+    lines = ["[Manish ke baare mein important facts — hamesha yaad rakho]\n"]
+
+    if rows:
+        current_cat = None
+        for cat, key, val in rows:
+            if cat != current_cat:
+                lines.append(f"\n{cat.upper()}:")
+                current_cat = cat
+            lines.append(f"  - {key}: {val}")
+
+    if sums:
+        lines.append("\n\nPAST SESSIONS (recent):")
+        for summary, ts in sums:
+            date = ts[:10]
+            lines.append(f"\n  [{date}] {summary}")
 
     return "\n".join(lines)
 
 
-def search_memories(keyword: str) -> list[dict]:
-    """Keyword se memory dhundho."""
-    conn  = _get_conn()
-    rows  = conn.execute(
-        "SELECT category, key, value, timestamp FROM memories WHERE key LIKE ? OR value LIKE ?",
-        (f"%{keyword}%", f"%{keyword}%")
+def list_all() -> list[dict]:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT category, key, value, timestamp FROM memories"
     ).fetchall()
     conn.close()
-    return [{"category": r[0], "key": r[1], "value": r[2], "timestamp": r[3]} for r in rows]
+    return [{"category": r[0], "key": r[1], "value": r[2], "timestamp": r[3]}
+            for r in rows]
 
 
 def delete_memory(category: str, key: str):
@@ -95,9 +107,28 @@ def delete_memory(category: str, key: str):
     conn.close()
 
 
-def list_all() -> list[dict]:
-    """Sab memories list karo (for debugging)."""
+# ── Session summaries ──────────────────────────────────────────────────
+
+def save_session_summary(summary: str):
     conn = _get_conn()
-    rows = conn.execute("SELECT category, key, value, timestamp FROM memories").fetchall()
+    conn.execute(
+        "INSERT INTO sessions (summary, timestamp) VALUES (?, ?)",
+        (summary, datetime.now().isoformat())
+    )
+    # Sirf last 20 sessions rakho
+    conn.execute("""
+        DELETE FROM sessions WHERE id NOT IN (
+            SELECT id FROM sessions ORDER BY id DESC LIMIT 20
+        )
+    """)
+    conn.commit()
     conn.close()
-    return [{"category": r[0], "key": r[1], "value": r[2], "timestamp": r[3]} for r in rows]
+
+
+def get_recent_sessions(n: int = 3) -> list[dict]:
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT summary, timestamp FROM sessions ORDER BY id DESC LIMIT ?", (n,)
+    ).fetchall()
+    conn.close()
+    return [{"summary": r[0], "timestamp": r[1]} for r in rows]

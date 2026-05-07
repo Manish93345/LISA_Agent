@@ -1,9 +1,5 @@
 """
-LISA — Voice Mode
-==================
-Usage: python voice_main.py
-
-Bol ke band karo: "bye lisa" / "alvida" / "band karo"
+LISA — Voice Mode Entry Point
 """
 
 from core.agent      import LisaAgent
@@ -20,8 +16,7 @@ def main():
     print("   Band karne ke liye bolo: 'bye lisa'")
     print("="*55 + "\n")
 
-    agent = LisaAgent()
-
+    agent    = LisaAgent()
     greeting = f"Haan {USER_NAME}, main sun rhi hoon! Bolo na."
     print(f"{AGENT_NAME}: {greeting}\n")
     speak(greeting)
@@ -29,28 +24,26 @@ def main():
     while True:
         try:
             user_text = listen_once(max_seconds=30)
-
             if not user_text:
                 continue
-
             if user_text == "quit":
                 break
 
-            # Exit commands
             exit_words = ["bye lisa", "alvida", "band karo", "quit", "exit"]
             if any(x in user_text.lower() for x in exit_words):
+                agent.end_session()
                 farewell = "Theek hai, alvida! Take care."
                 print(f"\n{AGENT_NAME}: {farewell}\n")
                 speak(farewell)
                 break
 
             print(f"{USER_NAME}: {user_text}")
-
             reply = agent.chat(user_text)
             print(f"{AGENT_NAME}: {reply}\n")
             speak(reply)
 
         except KeyboardInterrupt:
+            agent.end_session()
             print(f"\n\n  Alvida!\n")
             break
 
