@@ -1,644 +1,636 @@
 """
-LISA -- WhatsApp Web Automation (Selenium + Edge)
-===================================================
-Edge browser + dedicated profile = your main browser stays untouched.
-WhatsApp Web pe message/file bhejta hai -- Desktop 3 pe, invisible.
-
-Usage:
-    from actions.whatsapp_actions import whatsapp_send_message, whatsapp_send_file
-    success, msg = whatsapp_send_message(contact="aniket", message="meeting join kar")
-    success, msg = whatsapp_send_file(contact="aniket", folder="free fire", file="divya")
+LISA — WhatsApp Automation (v2 Fixed)
+========================================
+Fixes:
+  1. BMP error — send_keys se emoji crash hota tha.
+     Ab clipboard (pyperclip) se paste hoga — emoji/Hindi sab kaam karega.
+  2. Search slow — unnecessary waits kam kiye.
 """
 
-import os
 import time
 import random
-import threading
 from pathlib import Path
 
 from selenium import webdriver
-from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.edge.options import Options
 from selenium.common.exceptions import (
-    TimeoutException, NoSuchElementException,
-    WebDriverException, StaleElementReferenceException,
+    TimeoutException, NoSuchElementException, ElementNotInteractableException
 )
 
-from config.settings import (
-    WHATSAPP_PROFILE_DIR, WHATSAPP_URL,
-    WHATSAPP_LOAD_TIMEOUT, WHATSAPP_ACTION_DELAY,
-    WHATSAPP_CONFIRM_SEND,
-)
+try:
+    import pyperclip
+    CLIPBOARD_OK = True
+except ImportError:
+    CLIPBOARD_OK = False
+
+try:
+    from config import settings
+except ImportError:
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from config import settings
 
 
-# ── Singleton Driver ──────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
+#  SELECTORS
+# ══════════════════════════════════════════════════════════════════════
 
-_driver = None
-_driver_lock = threading.Lock()
+SEARCH_BOX_SELECTORS = [
+    (By.CSS_SELECTOR,  'div[role="searchbox"]'),
+    (By.CSS_SELECTOR,  'div[contenteditable="true"][role="searchbox"]'),
+    (By.CSS_SELECTOR,  'div[aria-label="Search input textbox"]'),
+    (By.XPATH,         '//div[@aria-label="Search input textbox"]'),
+    (By.XPATH,         '//div[@role="searchbox"]'),
+    (By.CSS_SELECTOR,  'div[data-testid="search-input"]'),
+    (By.CSS_SELECTOR,  '[data-testid="chat-list-search"] div[contenteditable="true"]'),
+    (By.XPATH,         '//*[@data-testid="chat-list-search"]//div[@contenteditable="true"]'),
+    (By.CSS_SELECTOR,  'div[contenteditable="true"][data-tab="3"]'),
+    (By.XPATH,         '//div[@contenteditable="true"][@data-tab="3"]'),
+    (By.CSS_SELECTOR,  'div[title="Search input textbox"]'),
+    (By.XPATH,         '//div[@title="Search input textbox"]'),
+    (By.XPATH,         '//div[@contenteditable="true"][contains(@aria-label,"Search")]'),
+    (By.CSS_SELECTOR,  'input[type="text"][title*="Search"]'),
+    (By.CSS_SELECTOR,  '#side div[contenteditable="true"]'),
+    (By.XPATH,         '//div[@id="side"]//div[@contenteditable="true"]'),
+]
+
+LOGIN_DETECT_SELECTORS = [
+    (By.CSS_SELECTOR, 'div[data-testid="chat-list"]'),
+    (By.CSS_SELECTOR, '#side'),
+    (By.CSS_SELECTOR, '#pane-side'),
+    (By.XPATH,        '//div[@aria-label="Chat list"]'),
+]
+
+MSG_BOX_SELECTORS = [
+    (By.CSS_SELECTOR,  'div[contenteditable="true"][data-tab="10"]'),
+    (By.XPATH,         '//div[@contenteditable="true"][@data-tab="10"]'),
+    (By.CSS_SELECTOR,  'div[aria-label="Type a message"]'),
+    (By.XPATH,         '//div[@aria-label="Type a message"]'),
+    (By.CSS_SELECTOR,  'div[title="Type a message"]'),
+    (By.XPATH,         '//div[@role="textbox"][contains(@title,"message")]'),
+    (By.XPATH,         '//footer//div[@contenteditable="true"]'),
+    (By.XPATH,         '//div[@data-testid="conversation-compose-box-input"]'),
+]
 
 
-def _human_delay():
-    """Random delay to mimic human behavior."""
-    lo, hi = WHATSAPP_ACTION_DELAY
+# ══════════════════════════════════════════════════════════════════════
+#  HELPERS
+# ══════════════════════════════════════════════════════════════════════
+
+def _delay(lo=0.3, hi=0.7):
     time.sleep(random.uniform(lo, hi))
 
 
-def _get_driver() -> webdriver.Edge:
-    """
-    Lazy-init singleton Edge driver with dedicated WhatsApp profile.
-    Reuses existing driver if still alive.
-    Selenium 4.6+ has built-in SeleniumManager -- no webdriver-manager needed.
-    """
-    global _driver
+def _find_element(driver, selectors, timeout=6):
+    for by, val in selectors:
+        try:
+            el = WebDriverWait(driver, timeout).until(
+                EC.element_to_be_clickable((by, val))
+            )
+            return el
+        except (TimeoutException, NoSuchElementException):
+            continue
+    return None
 
-    with _driver_lock:
-        # Check if existing driver is still alive
-        if _driver is not None:
-            try:
-                _driver.title  # simple check -- throws if dead
-                return _driver
-            except Exception:
-                _driver = None
+
+def _type_via_clipboard(driver, element, text: str):
+    """
+    THE FIX for BMP error:
+    send_keys emoji bhejne ki koshish karta hai byte-by-byte,
+    msedgedriver BMP (U+0000 to U+FFFF) se bahar nahi ja sakta.
+    Clipboard se paste karo — koi restriction nahi.
+
+    Requires: pip install pyperclip
+    """
+    if CLIPBOARD_OK:
+        pyperclip.copy(text)
+        element.send_keys(Keys.CONTROL + "v")
+        _delay(0.15, 0.25)
+    else:
+        # JS execCommand fallback (pyperclip nahi hai toh)
+        driver.execute_script(
+            "arguments[0].focus();"
+            "document.execCommand('insertText', false, arguments[1]);",
+            element, text
+        )
+        _delay(0.15, 0.25)
+
+
+def _js_find_search_box(driver):
+    try:
+        return driver.execute_script("""
+            let el = document.querySelector('div[role="searchbox"]');
+            if (el) return el;
+            el = document.querySelector('[aria-label*="Search"][contenteditable="true"]');
+            if (el) return el;
+            const side = document.querySelector('#side') || document.querySelector('#pane-side');
+            if (side) {
+                el = side.querySelector('div[contenteditable="true"]');
+                if (el) return el;
+            }
+            el = document.querySelector('div[data-tab="3"]');
+            if (el) return el;
+            for (const div of document.querySelectorAll('div[contenteditable="true"]')) {
+                const label = (div.getAttribute('aria-label') || '').toLowerCase();
+                const title = (div.getAttribute('title') || '').toLowerCase();
+                if (label.includes('search') || title.includes('search')) return div;
+            }
+            return null;
+        """)
+    except Exception as e:
+        print(f"  [WhatsApp] JS search box error: {e}")
+        return None
+
+
+def _js_click_contact(driver, name: str):
+    name_lower = name.lower()
+    try:
+        return driver.execute_script(f"""
+            const q = "{name_lower}";
+            for (const span of document.querySelectorAll('span[title]')) {{
+                if (!span.offsetParent) continue;
+                if (span.title.toLowerCase().includes(q)) {{
+                    let el = span;
+                    for (let i = 0; i < 10; i++) {{
+                        el = el.parentElement;
+                        if (!el) break;
+                        const role = el.getAttribute('role');
+                        const tab  = el.getAttribute('tabindex');
+                        if (role === 'listitem' || role === 'button' || tab === '0' || tab === '-1') {{
+                            el.click();
+                            return span.title;
+                        }}
+                    }}
+                    span.click();
+                    return span.title;
+                }}
+            }}
+            return null;
+        """)
+    except Exception as e:
+        print(f"  [WhatsApp] JS contact click error: {e}")
+        return None
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  MAIN CLASS
+# ══════════════════════════════════════════════════════════════════════
+
+class WhatsAppDriver:
+
+    def __init__(self):
+        self.driver: webdriver.Edge | None = None
+
+    def start(self) -> bool:
+        profile_dir = settings.WHATSAPP_PROFILE_DIR
+        Path(profile_dir).mkdir(parents=True, exist_ok=True)
+        first_run = not any(Path(profile_dir).iterdir())
 
         print("  [WhatsApp] Edge browser start ho rha hai...")
-
-        # Ensure profile dir exists
-        os.makedirs(WHATSAPP_PROFILE_DIR, exist_ok=True)
-
-        options = Options()
-        options.add_argument(f"user-data-dir={WHATSAPP_PROFILE_DIR}")
-        options.add_argument("--start-minimized")
-        # Suppress automation detection banners
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
+        opts = Options()
+        opts.add_argument(f"--user-data-dir={profile_dir}")
+        opts.add_argument("--profile-directory=Default")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--log-level=3")
+        opts.add_experimental_option("excludeSwitches", ["enable-logging"])
+        if settings.WHATSAPP_HEADLESS:
+            opts.add_argument("--headless=new")
 
         try:
-            # Selenium 4.6+ auto-manages driver download via SeleniumManager
-            _driver = webdriver.Edge(options=options)
+            self.driver = webdriver.Edge(options=opts)
         except Exception as e:
-            print(f"  [WhatsApp] Edge start nahi hua: {e}")
-            return None
-
-        # Navigate to WhatsApp Web
-        _driver.get(WHATSAPP_URL)
-        print("  [WhatsApp] WhatsApp Web load ho rha hai...")
-
-        # Wait for WhatsApp to fully load (QR scan if first time)
-        # Edge stays VISIBLE on main screen so user can scan QR if needed
-        loaded = _wait_for_load()
-
-        if not loaded:
-            print("  [WhatsApp] WhatsApp load nahi hua -- QR scan zaruri ho sakta hai")
-            print("  [WhatsApp] QR scan karo, phir ye apne aap detect kar lega...")
-
-            # Keep checking for up to 120 seconds (QR scan time)
-            for attempt in range(12):
-                time.sleep(10)
-                if _wait_for_load(timeout=5):
-                    loaded = True
-                    print("  [WhatsApp] QR scan successful! WhatsApp ready!")
-                    break
-
-            if not loaded:
-                print("  [WhatsApp] 2 minute wait kiya, WhatsApp load nahi hua")
-                return _driver  # still return -- user can try manually
-
-        if loaded:
-            print("  [WhatsApp] WhatsApp ready!")
-            # NOW move to Desktop 3 (after WhatsApp is loaded)
-            _move_selenium_window_to_desktop3()
-
-        return _driver
-
-
-def _move_selenium_window_to_desktop3():
-    """
-    Move ONLY the Selenium-controlled Edge window to Desktop 3.
-    Uses Selenium's window handle to identify the correct window.
-    Does NOT touch any other Edge windows.
-    """
-    try:
-        from actions.desktop_manager import _load_dll, LISA_DESKTOP
-        import win32gui
-
-        dll = _load_dll()
-        if dll is None:
-            return
-
-        if _driver is None:
-            return
-
-        # Get the window title from Selenium
-        selenium_title = _driver.title
-
-        # Find the window with matching title
-        found_hwnds = []
-        def _cb(hwnd, _):
-            try:
-                if win32gui.IsWindowVisible(hwnd):
-                    title = win32gui.GetWindowText(hwnd)
-                    # Match by Selenium's current page title
-                    if selenium_title and selenium_title in title:
-                        found_hwnds.append(hwnd)
-                    # Also match WhatsApp-specific titles
-                    elif "WhatsApp" in title:
-                        found_hwnds.append(hwnd)
-            except Exception:
-                pass
-            return True
-
-        win32gui.EnumWindows(_cb, None)
-
-        for hwnd in found_hwnds:
-            try:
-                result = dll.MoveWindowToDesktopNumber(hwnd, LISA_DESKTOP)
-                if result != -1:
-                    title = win32gui.GetWindowText(hwnd)
-                    print(f"  [WhatsApp] Desktop 3 pe move kiya: {title}")
-            except Exception:
-                pass
-
-        if not found_hwnds:
-            print("  [WhatsApp] Window nahi mili Desktop 3 move ke liye")
-
-    except Exception as e:
-        print(f"  [WhatsApp] Desktop 3 move skip: {e}")
-
-
-def _wait_for_load(timeout: int = None) -> bool:
-    """
-    Wait for WhatsApp Web to fully load.
-    Checks for the search/chat list to appear.
-    """
-    if _driver is None:
-        return False
-
-    wait_time = timeout if timeout else WHATSAPP_LOAD_TIMEOUT
-
-    try:
-        # Wait for the side panel (search area) to load
-        # This appears after QR scan and login
-        WebDriverWait(_driver, wait_time).until(
-            EC.presence_of_element_located((
-                By.XPATH,
-                "//div[@contenteditable='true'][@data-tab='3']"
-            ))
-        )
-        return True
-    except TimeoutException:
-        return False
-
-
-def close_driver():
-    """Close the Edge browser cleanly."""
-    global _driver
-    with _driver_lock:
-        if _driver is not None:
-            try:
-                _driver.quit()
-            except Exception:
-                pass
-            _driver = None
-            print("  [WhatsApp] Browser band ho gaya")
-
-
-# ── Contact Search ────────────────────────────────────────────────────
-
-def _search_contact(contact_name: str) -> bool:
-    """
-    WhatsApp search bar mein contact search karo.
-    Returns True if contact found and chat opened.
-    """
-    driver = _get_driver()
-    if driver is None:
-        return False
-
-    try:
-        # Find and click search box
-        search_box = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((
-                By.XPATH,
-                "//div[@contenteditable='true'][@data-tab='3']"
-            ))
-        )
-        search_box.click()
-        _human_delay()
-
-        # Clear any existing text
-        search_box.send_keys(Keys.CONTROL + "a")
-        search_box.send_keys(Keys.DELETE)
-        time.sleep(0.3)
-
-        # Type contact name
-        search_box.send_keys(contact_name)
-        time.sleep(2.0)  # Wait for search results to populate
-
-        # Try to find the best matching contact from results
-        # WhatsApp shows results as span elements with title attribute
-        try:
-            results = driver.find_elements(
-                By.XPATH,
-                "//div[@id='pane-side']//span[@title]"
-            )
-
-            if not results:
-                print(f"  [WhatsApp] '{contact_name}' ka koi result nahi aaya")
-                # Press Escape to close search
-                search_box.send_keys(Keys.ESCAPE)
-                return False
-
-            # Collect visible contact names
-            contact_names = []
-            contact_elements = []
-            for el in results:
-                try:
-                    title = el.get_attribute("title")
-                    if title:
-                        contact_names.append(title)
-                        contact_elements.append(el)
-                except StaleElementReferenceException:
-                    continue
-
-            if not contact_names:
-                print(f"  [WhatsApp] Search results mein naam nahi mila")
-                search_box.send_keys(Keys.ESCAPE)
-                return False
-
-            # Fuzzy match the best contact
-            best_idx = _fuzzy_match_contact(contact_name, contact_names)
-
-            if best_idx is None:
-                # No good match -- just click the first result
-                print(f"  [WhatsApp] Fuzzy match nahi mila, pehla result use kar rhe: '{contact_names[0]}'")
-                best_idx = 0
-
-            matched_name = contact_names[best_idx]
-            print(f"  [WhatsApp] Contact match: '{contact_name}' -> '{matched_name}'")
-
-            # Click on the matched contact
-            contact_elements[best_idx].click()
-            _human_delay()
-            return True
-
-        except Exception as e:
-            print(f"  [WhatsApp] Contact search error: {e}")
-            # Fallback -- try pressing Enter on first result
-            search_box.send_keys(Keys.ENTER)
-            _human_delay()
-            return True
-
-    except Exception as e:
-        print(f"  [WhatsApp] Search box error: {e}")
-        return False
-
-
-def _fuzzy_match_contact(hint: str, contacts: list[str]) -> int | None:
-    """
-    Fuzzy match contact name from WhatsApp search results.
-    Returns index of best match, or None if no good match.
-    """
-    try:
-        from rapidfuzz import fuzz, process
-
-        hint_lower = hint.lower().strip()
-        contacts_lower = [c.lower() for c in contacts]
-
-        result = process.extractOne(
-            hint_lower,
-            contacts_lower,
-            scorer=fuzz.WRatio,
-            score_cutoff=50  # pretty relaxed -- WA search already filters
-        )
-
-        if result is None:
-            return None
-
-        _, score, idx = result
-        print(f"  [WhatsApp] Fuzzy: '{hint}' -> '{contacts[idx]}' (score: {score:.0f})")
-        return idx
-
-    except ImportError:
-        # rapidfuzz not available -- just check simple substring
-        hint_lower = hint.lower()
-        for i, name in enumerate(contacts):
-            if hint_lower in name.lower() or name.lower() in hint_lower:
-                return i
-        return 0  # default to first result
-
-
-# ── Message Sending ───────────────────────────────────────────────────
-
-def _type_and_send_message(message: str) -> bool:
-    """
-    Currently open chat mein message type karo aur send karo.
-    """
-    driver = _get_driver()
-    if driver is None:
-        return False
-
-    try:
-        # Find message input box
-        msg_box = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((
-                By.XPATH,
-                "//div[@contenteditable='true'][@data-tab='10']"
-            ))
-        )
-        msg_box.click()
-        _human_delay()
-
-        # Type message (character by character for multi-line support)
-        # For simple single-line messages, send_keys works fine
-        msg_box.send_keys(message)
-        _human_delay()
-
-        # Click send button
-        send_btn = WebDriverWait(driver, 5).until(
-            EC.element_to_be_clickable((
-                By.XPATH,
-                "//span[@data-icon='send']"
-            ))
-        )
-        send_btn.click()
-        _human_delay()
-
-        return True
-
-    except Exception as e:
-        print(f"  [WhatsApp] Message send error: {e}")
-        return False
-
-
-# ── File Sending ──────────────────────────────────────────────────────
-
-def _send_file_to_chat(file_path: str, caption: str = "") -> bool:
-    """
-    Currently open chat mein file attach karo aur send karo.
-    Uses hidden <input type='file'> element.
-    """
-    driver = _get_driver()
-    if driver is None:
-        return False
-
-    if not os.path.exists(file_path):
-        print(f"  [WhatsApp] File nahi mili: {file_path}")
-        return False
-
-    abs_path = os.path.abspath(file_path)
-
-    try:
-        # Click the attach/plus button
-        try:
-            attach_btn = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//div[@title='Attach']"
-                ))
-            )
-            attach_btn.click()
-        except TimeoutException:
-            # Try newer WhatsApp UI with plus icon
-            try:
-                attach_btn = driver.find_element(
-                    By.XPATH,
-                    "//span[@data-icon='plus']"
-                )
-                attach_btn.click()
-            except NoSuchElementException:
-                # Try the clip/paperclip icon
-                attach_btn = driver.find_element(
-                    By.XPATH,
-                    "//span[@data-icon='clip']"
-                )
-                attach_btn.click()
-
-        _human_delay()
-
-        # Find the file input element and send file path
-        # WhatsApp has multiple file inputs -- we want the document one
-        file_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='file']")
-
-        if not file_inputs:
-            print("  [WhatsApp] File input nahi mila")
+            print(f"  [X] Edge driver error: {e}")
             return False
 
-        # Use the last file input (usually the most general one)
-        # or find one that accepts all files
-        target_input = None
-        for inp in file_inputs:
-            accept = inp.get_attribute("accept") or ""
-            if not accept or "*" in accept:
-                target_input = inp
-                break
+        self.driver.get(settings.WHATSAPP_URL)
+        print("  [WhatsApp] WhatsApp Web load ho rha hai...")
 
-        if target_input is None:
-            # Fallback -- use the first available
-            target_input = file_inputs[0]
+        if first_run:
+            self.driver.maximize_window()
+            print("  [WhatsApp] Pehli baar — QR scan karo Edge mein")
+            ok = self._wait_login(timeout=120)
+        else:
+            ok = self._wait_login(timeout=settings.WHATSAPP_LOAD_TIMEOUT)
 
-        target_input.send_keys(abs_path)
-        time.sleep(2.0)  # Wait for file to load/preview
+        if not ok:
+            print("  [X] Login timeout")
+            return False
 
-        # Add caption if provided
-        if caption:
-            try:
-                caption_box = driver.find_element(
-                    By.XPATH,
-                    "//div[@contenteditable='true'][@data-tab='10'] | "
-                    "//div[contains(@class,'copyable-text') and @contenteditable='true' and @role='textbox']"
-                )
-                caption_box.click()
-                caption_box.send_keys(caption)
-                _human_delay()
-            except Exception:
-                pass  # Caption is optional
-
-        # Click the send button (in file preview)
-        try:
-            send_btn = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((
-                    By.XPATH,
-                    "//span[@data-icon='send']"
-                ))
-            )
-            send_btn.click()
-        except TimeoutException:
-            # Try alternate send button in media preview
-            send_btn = driver.find_element(
-                By.XPATH,
-                "//div[@role='button'][@aria-label='Send']"
-            )
-            send_btn.click()
-
-        _human_delay()
-        time.sleep(2.0)  # Wait for upload to start
-
-        print(f"  [WhatsApp] File sent: {Path(file_path).name}")
+        print("  [WhatsApp] QR scan successful! Session save ho gaya")
+        # 8s → 3s
+        print("  [WhatsApp] Sidebar load ho rhi hai (3s wait)...")
+        time.sleep(3)
+        print("  [WhatsApp] Ready!")
         return True
 
-    except Exception as e:
-        print(f"  [WhatsApp] File send error: {e}")
-        # Press Escape to close any open dialogs
+    def _wait_login(self, timeout=60) -> bool:
         try:
-            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+            WebDriverWait(self.driver, timeout).until(
+                EC.any_of(*[
+                    EC.presence_of_element_located((by, val))
+                    for by, val in LOGIN_DETECT_SELECTORS
+                ])
+            )
+            return True
+        except TimeoutException:
+            return False
+
+    def _get_search_box(self, timeout=5):
+        el = _find_element(self.driver, SEARCH_BOX_SELECTORS, timeout=timeout)
+        return el or _js_find_search_box(self.driver)
+
+    def search_and_open_contact(self, name: str) -> bool:
+        print(f"  [WhatsApp] '{name}' dhundh rhi hoon...")
+
+        search_box = self._get_search_box()
+        if not search_box:
+            print("  [X] Search box nahi mila")
+            self._save_debug()
+            return False
+
+        try:
+            self.driver.execute_script("arguments[0].click();", search_box)
+            _delay(0.2, 0.3)
+            search_box.send_keys(Keys.CONTROL + "a")
+            search_box.send_keys(Keys.DELETE)
+            _delay(0.1, 0.15)
+            # Contact name = ASCII only, send_keys safe hai
+            search_box.send_keys(name)
+        except ElementNotInteractableException:
+            self.driver.execute_script("arguments[0].focus();", search_box)
+            search_box.send_keys(name)
+
+        _delay(1.0, 1.3)   # 2.5s → 1s
+        return self._click_first_result(name)
+
+    def _click_first_result(self, name: str) -> bool:
+        name_lower = name.lower().strip()
+        span_xpath = (
+            f'//span[@title and contains('
+            f'translate(@title,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz")'
+            f',"{name_lower}")]'
+        )
+        try:
+            spans = WebDriverWait(self.driver, 5).until(
+                EC.presence_of_all_elements_located((By.XPATH, span_xpath))
+            )
+
+            # ── Word-boundary match — exact name wala contact prefer karo ──
+            import re
+            pattern = re.compile(r'\b' + re.escape(name_lower) + r'\b')
+
+            # Pass 1: exact word match (e.g. "Om" not inside "kaam" or long string)
+            for span in spans:
+                if not span.is_displayed():
+                    continue
+                title = span.get_attribute('title') or ''
+                title_lower = title.lower()
+                # Short titles preferred (actual contact names are short)
+                if len(title) > 60:
+                    continue
+                if pattern.search(title_lower):
+                    if self._click_parent_row(span):
+                        _delay(0.4, 0.6)
+                        print(f"  [✓] Contact mila: '{title}'")
+                        return True
+
+            # Pass 2: startswith match (e.g. "Om Sharma")
+            for span in spans:
+                if not span.is_displayed():
+                    continue
+                title = span.get_attribute('title') or ''
+                if len(title) > 60:
+                    continue
+                if title.lower().startswith(name_lower):
+                    if self._click_parent_row(span):
+                        _delay(0.4, 0.6)
+                        print(f"  [✓] Contact mila (startswith): '{title}'")
+                        return True
+
+            # Pass 3: any contains match but skip very long titles (group chats/self)
+            for span in spans:
+                if not span.is_displayed():
+                    continue
+                title = span.get_attribute('title') or ''
+                if len(title) > 60:
+                    continue
+                if name_lower in title.lower():
+                    if self._click_parent_row(span):
+                        _delay(0.4, 0.6)
+                        print(f"  [✓] Contact mila (contains): '{title}'")
+                        return True
+
+        except TimeoutException:
+            pass
+
+        for xpath in ['//div[@data-testid="cell-frame-container"]', '//div[@role="listitem"]']:
+            try:
+                for cell in self.driver.find_elements(By.XPATH, xpath)[:4]:
+                    if cell.is_displayed():
+                        try:
+                            cell.click()
+                            _delay(0.4, 0.6)
+                            print(f"  [✓] Pehla result click (cell): {name}")
+                            return True
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+        matched = _js_click_contact(self.driver, name)
+        if matched:
+            _delay(0.4, 0.6)
+            print(f"  [✓] JS se contact mila: '{matched}'")
+            return True
+
+        print(f"  [X] '{name}' result nahi mila")
+        self._save_debug()
+        return False
+
+    def _click_parent_row(self, element) -> bool:
+        el = element
+        try:
+            for _ in range(10):
+                role = el.get_attribute("role")
+                tab  = el.get_attribute("tabindex")
+                if role in ("listitem", "button", "gridcell") or tab in ("0", "-1"):
+                    el.click()
+                    return True
+                parent = self.driver.execute_script(
+                    "return arguments[0].parentElement;", el)
+                if not parent:
+                    break
+                el = parent
         except Exception:
             pass
         return False
 
+    def send_message(self, message: str) -> bool:
+        msg_box = _find_element(self.driver, MSG_BOX_SELECTORS, timeout=8)
+        if not msg_box:
+            print("  [X] Message box nahi mila")
+            return False
 
-# ── Public API — Called by Router ─────────────────────────────────────
+        try:
+            self.driver.execute_script("arguments[0].click();", msg_box)
+            _delay(0.2, 0.3)
+
+            lines = message.split('\n')
+            for i, line in enumerate(lines):
+                if line:
+                    _type_via_clipboard(self.driver, msg_box, line)
+                if i < len(lines) - 1:
+                    msg_box.send_keys(Keys.SHIFT + Keys.ENTER)
+
+            _delay(0.2, 0.3)
+
+            if settings.WHATSAPP_CONFIRM_SEND:
+                print(f"\n  ┌─ Message preview ─────────────────────────")
+                for line in message.split('\n'):
+                    print(f"  │  {line}")
+                print(f"  └───────────────────────────────────────────")
+                confirm = input("  Bhejun? (y/n): ").strip().lower()
+                if confirm != 'y':
+                    msg_box.send_keys(Keys.ESCAPE)
+                    print("  [WhatsApp] Cancel")
+                    return False
+
+            msg_box.send_keys(Keys.ENTER)
+            _delay(0.3, 0.5)
+            print("  [✓] Message bhej diya!")
+            return True
+
+        except Exception as e:
+            print(f"  [X] Send error: {e}")
+            return False
+
+    def send_whatsapp_message(self, contact: str, message: str) -> bool:
+        if not self.driver:
+            if not self.start():
+                return False
+        if not self.search_and_open_contact(contact):
+            return False
+        return self.send_message(message)
+
+    def close(self):
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            self.driver = None
+            print("  [WhatsApp] Browser band ho gaya")
+
+    def _save_debug(self):
+        if not self.driver:
+            return
+        try:
+            debug_dir = Path(settings.BASE_DIR) / "data"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            self.driver.save_screenshot(str(debug_dir / "wa_debug.png"))
+            (debug_dir / "wa_debug.html").write_text(
+                self.driver.page_source, encoding="utf-8")
+            print("  [WhatsApp] Debug saved → data/wa_debug.png")
+            divs = self.driver.execute_script("""
+                return Array.from(document.querySelectorAll('div[contenteditable="true"]'))
+                    .map(d => ({
+                        dataTab: d.getAttribute('data-tab'),
+                        role: d.getAttribute('role'),
+                        ariaLabel: d.getAttribute('aria-label'),
+                        title: d.getAttribute('title'),
+                    }));
+            """)
+            print("  [DEBUG] contenteditable divs:")
+            for i, d in enumerate(divs or []):
+                print(f"    [{i}] data-tab={d['dataTab']} role={d['role']} "
+                      f"aria-label={d['ariaLabel']} title={d['title']}")
+        except Exception as e:
+            print(f"  Debug save error: {e}")
+
+
+# ── Singleton ──────────────────────────────────────────────────────────
+_wa_driver: WhatsAppDriver | None = None
+
+def get_wa_driver() -> WhatsAppDriver:
+    global _wa_driver
+    if _wa_driver is None:
+        _wa_driver = WhatsAppDriver()
+    return _wa_driver
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  PUBLIC API — router.py yahi import karta hai
+# ══════════════════════════════════════════════════════════════════════
 
 def whatsapp_send_message(
-    query: str = "",
-    contact: str = "",
+    contact: str,
     message: str = "",
-    **kwargs
-) -> tuple[bool, str]:
+    query:   str = "",        # router.py 'query' kwarg
+    intent:  str = "",
+    context=None,             # conversation history — LLM context ke liye
+    conversation_context=None,# alias
+    draft:   bool = True,
+) -> tuple:
     """
-    WhatsApp pe message bhejo.
-
-    Args:
-        query   : original user message (fallback/context)
-        contact : contact name hint (fuzzy matched)
-        message : message content to send
-
-    Returns:
-        (success, status_message)
+    router.py ka entry point — (bool, str) tuple return karta hai.
+    context/conversation_context pass karo toh LLM mood/tone samjhega.
     """
-    if not contact:
-        return False, "contact naam nahi bataya -- kisko message bhejun?"
+    raw  = message or query or intent
+    ctx  = context or conversation_context
+    if not raw:
+        return (False, "Koi message/query/intent nahi mila")
 
-    if not message:
-        return False, "message kya bhejun? Batao na"
+    if draft:
+        try:
+            from actions.wa_send_action import smart_whatsapp_send
+            return smart_whatsapp_send(
+                contact=contact,
+                intent=raw,
+                conversation_context=ctx,
+            )
+        except Exception as e:
+            print(f"  [!] LLM draft failed ({e}) — raw bhej rhi hoon...")
 
-    # Step 1: Open WhatsApp and search contact
-    if not _search_contact(contact):
-        return False, f"'{contact}' naam ka contact nahi mila WhatsApp pe"
-
-    # Step 2: Check if confirmation is needed
-    if WHATSAPP_CONFIRM_SEND:
-        return True, f"CONFIRM_WHATSAPP_MSG|{contact}|{message}"
-
-    # Step 3: Send message
-    if _type_and_send_message(message):
-        return True, f"'{contact}' ko message bhej diya: \"{message}\""
-    else:
-        return False, f"message send nahi ho paya '{contact}' ko"
+    # Fallback: bina drafting
+    wa = get_wa_driver()
+    if not wa.driver:
+        if not wa.start():
+            return (False, "Browser start nahi hua")
+    ok = wa.send_whatsapp_message(contact, raw)
+    return (True, f"{contact} ko message bhej diya!") if ok else (False, "Send fail")
 
 
-def whatsapp_confirm_and_send(action_type: str, contact: str, content: str) -> tuple[bool, str]:
+def whatsapp_send_file(contact: str, file_path: str, caption: str = "") -> bool:
     """
-    User ne confirm kiya -- ab bhejo.
-    Called after confirmation response.
-
-    Args:
-        action_type : "message" or "file"
-        contact     : contact name (already searched, chat should be open)
-        content     : message text or file path
+    File/attachment bhejne ke liye — abhi basic implementation.
+    Contact open karo, attachment button click karo, file select karo.
     """
-    if action_type == "message":
-        if _type_and_send_message(content):
-            return True, f"message bhej diya!"
-        return False, "message send nahi ho paya"
+    import os
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
 
-    elif action_type == "file":
-        if _send_file_to_chat(content):
-            return True, f"file bhej di!"
-        return False, "file send nahi ho payi"
+    wa = get_wa_driver()
+    if not wa.driver:
+        if not wa.start():
+            return False
 
-    return False, "unknown action type"
+    # Contact open karo
+    if not wa.search_and_open_contact(contact):
+        return False
+
+    driver = wa.driver
+
+    # File path validate karo
+    abs_path = os.path.abspath(file_path)
+    if not os.path.exists(abs_path):
+        print(f"  [X] File nahi mili: {abs_path}")
+        return False
+
+    try:
+        # Attachment (clip) button click karo
+        attach_selectors = [
+            (By.CSS_SELECTOR, 'div[data-testid="attach-btn"]'),
+            (By.CSS_SELECTOR, 'button[data-testid="attach-btn"]'),
+            (By.XPATH,        '//div[@title="Attach"]'),
+            (By.XPATH,        '//span[@data-testid="clip"]'),
+            (By.CSS_SELECTOR, '[data-testid="clip"]'),
+        ]
+        attach_btn = _find_element(driver, attach_selectors, timeout=6)
+        if not attach_btn:
+            print("  [X] Attachment button nahi mila")
+            return False
+
+        attach_btn.click()
+        _delay(0.5, 0.8)
+
+        # File input element dhundho
+        file_input_selectors = [
+            (By.CSS_SELECTOR, 'input[type="file"]'),
+            (By.XPATH,        '//input[@type="file"]'),
+        ]
+        # File inputs hidden hote hain — directly send_keys karo
+        file_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="file"]')
+        if not file_inputs:
+            print("  [X] File input nahi mila")
+            return False
+
+        # Pehla visible/document input use karo
+        file_inputs[0].send_keys(abs_path)
+        _delay(1.0, 1.5)
+
+        # Caption add karo agar hai
+        if caption:
+            caption_selectors = [
+                (By.CSS_SELECTOR, 'div[data-testid="media-caption-input"]'),
+                (By.XPATH,        '//div[@aria-label="Add a caption"]'),
+                (By.CSS_SELECTOR, 'div[aria-label="Add a caption"]'),
+            ]
+            caption_box = _find_element(driver, caption_selectors, timeout=4)
+            if caption_box:
+                _type_via_clipboard(driver, caption_box, caption)
+                _delay(0.3, 0.5)
+
+        # Send button
+        send_selectors = [
+            (By.CSS_SELECTOR, 'div[data-testid="send"]'),
+            (By.CSS_SELECTOR, 'button[data-testid="send"]'),
+            (By.XPATH,        '//div[@aria-label="Send"]'),
+            (By.XPATH,        '//span[@data-testid="send"]'),
+        ]
+        send_btn = _find_element(driver, send_selectors, timeout=5)
+        if send_btn:
+            send_btn.click()
+            _delay(0.5, 1.0)
+            print(f"  [✓] File bhej di: {os.path.basename(abs_path)}")
+            return True
+        else:
+            # Enter se bhi send ho sakta hai
+            from selenium.webdriver.common.keys import Keys
+            driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ENTER)
+            _delay(0.5, 1.0)
+            print(f"  [✓] File bhej di (Enter): {os.path.basename(abs_path)}")
+            return True
+
+    except Exception as e:
+        print(f"  [X] File send error: {e}")
+        return False
 
 
-def whatsapp_send_file(
-    query: str = "",
-    contact: str = "",
-    folder: str = "",
-    file: str = "",
-    **kwargs
-) -> tuple[bool, str]:
-    """
-    WhatsApp pe file bhejo — pehle file_finder se dhundhega, phir bhejega.
-
-    Args:
-        query   : original user message
-        contact : contact name hint
-        folder  : folder hint for file_finder
-        file    : file hint for file_finder
-
-    Returns:
-        (success, status_message)
-    """
-    if not contact:
-        return False, "contact naam nahi bataya -- kisko file bhejun?"
-
-    if not folder and not file:
-        return False, "kaunsi file bhejni hai? Folder ya file naam batao"
-
-    # Step 1: Find the file using existing file_finder
-    from actions.file_finder import smart_find
-
-    success, file_path, find_msg = smart_find(folder_hint=folder, file_hint=file)
-
-    if not success or not file_path:
-        return False, f"file nahi mili: {find_msg}"
-
-    if os.path.isdir(file_path):
-        return False, f"ye toh folder hai ({find_msg}) -- file ka naam bhi batao"
-
-    file_name = Path(file_path).name
-
-    # Step 2: Open WhatsApp and search contact
-    if not _search_contact(contact):
-        return False, f"'{contact}' naam ka contact nahi mila WhatsApp pe"
-
-    # Step 3: Check if confirmation is needed
-    if WHATSAPP_CONFIRM_SEND:
-        return True, f"CONFIRM_WHATSAPP_FILE|{contact}|{file_path}|{file_name}"
-
-    # Step 4: Send file
-    if _send_file_to_chat(file_path):
-        return True, f"'{file_name}' bhej diya '{contact}' ko WhatsApp pe!"
-    else:
-        return False, f"file send nahi ho payi '{contact}' ko"
-
-
-# ── Standalone Test ───────────────────────────────────────────────────
-
+# ══════════════════════════════════════════════════════════════════════
+#  STANDALONE TEST
+# ══════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("\n" + "=" * 55)
-    print("   LISA -- WhatsApp Automation Test")
+    print("   LISA -- WhatsApp Automation Test (v2 - Fixed)")
     print("=" * 55)
-    print()
-    print("  Edge browser khulega with dedicated profile.")
-    print("  Pehli baar hai toh QR code dikhega -- scan karo.")
-    print("  WhatsApp load hone ke baad automatically detect ho jayega.")
-    print()
 
-    driver = _get_driver()
+    if not CLIPBOARD_OK:
+        print("\n  [!] pyperclip nahi hai — install karo pehle:")
+        print("      pip install pyperclip\n")
 
-    if driver is None:
-        print("  [X] Driver start nahi hua!")
+    wa = WhatsAppDriver()
+    if not wa.start():
+        input("\n  ENTER to close...")
         exit(1)
 
-    # Test: search a contact
-    test_contact = input("\n  Test contact name (e.g., 'aniket'): ").strip()
-    if test_contact:
-        found = _search_contact(test_contact)
-        if found:
-            print(f"  [OK] Contact found and chat opened: {test_contact}")
+    contact = input("\n  Test contact (e.g., 'aniket'): ").strip()
+    if not contact:
+        wa.close()
+        exit(0)
 
-            send_test = input("  Test message bhejun? (y/n): ").strip().lower()
-            if send_test == "y":
-                test_msg = "Hello! Ye Lisa ka test message hai -- ignore karna :)"
-                if _type_and_send_message(test_msg):
-                    print(f"  [OK] Message sent: {test_msg}")
-                else:
-                    print("  [X] Message send failed")
-        else:
-            print(f"  [X] Contact nahi mila: {test_contact}")
+    found = wa.search_and_open_contact(contact)
+    if found:
+        msg = input("  Message (emoji try kar sakte ho 🙏): ").strip()
+        if msg:
+            wa.send_message(msg)
+    else:
+        print(f"  [X] Contact nahi mila: '{contact}'")
 
-    input("\n  ENTER dabao browser band karne ke liye...")
-    close_driver()
-    print("  Done!")
+    input("\n  ENTER to close...")
+    wa.close()

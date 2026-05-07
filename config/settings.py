@@ -69,22 +69,31 @@ DEFAULT_MODE      = MODE_PERSONAL
 
 # ── Voice Settings ─────────────────────────────────────────────────────
 WHISPER_MODEL_SIZE = "medium"
- 
+
 # gTTS language — "hi" handles Hinglish best
 # "hi" = Hindi/Hinglish | "en" = English
 TTS_LANG = "en"
- 
+
 # Speed — gTTS mein slow=False means normal speed
 TTS_RATE = "+0%"
- 
+
 # ffplay path (backup playback)
 FFPLAY_PATH = r"C:\ffmpeg\bin\ffplay.exe"
 
 LISA_DESKTOP_INDEX = 2   # Desktop 3 = index 2
 
 # ── WhatsApp Automation ────────────────────────────────────────────────
+# Lisa ka dedicated Edge profile -- primary Edge ko disturb nahi karega.
+# Note: Edge ek hi profile 2 instances mein run nahi karne deta, isi liye
+# Lisa apna alag profile rakhti hai. Same WhatsApp account hi rahega
+# (ek baar QR scan, fir permanent).
 WHATSAPP_PROFILE_DIR  = str(BASE_DIR / "data" / "whatsapp_profile")
 WHATSAPP_URL          = "https://web.whatsapp.com"
-WHATSAPP_LOAD_TIMEOUT = 30       # seconds to wait for WA to fully load
-WHATSAPP_ACTION_DELAY = (0.5, 1.5)  # random delay range (human-like)
-WHATSAPP_CONFIRM_SEND = True     # True = Lisa asks before sending
+WHATSAPP_LOAD_TIMEOUT = 60          # seconds for first load (badhaya naya UI slow hai)
+WHATSAPP_SIDEBAR_WAIT = 8           # seconds — sidebar fully render hone ka wait
+WHATSAPP_ACTION_DELAY = (0.5, 1.5)  # human-like delay
+WHATSAPP_CONFIRM_SEND = True        # True = Lisa pehle confirmation maangti hai
+
+# Headless mode -- TRUE = invisible, lekin QR scan tricky
+# Recommended: False
+WHATSAPP_HEADLESS = False

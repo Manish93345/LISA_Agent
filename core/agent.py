@@ -1,6 +1,8 @@
 """
-LISA — Main Agent (with Smart Memory)
+LISA — Main Agent (with Smart Memory + WhatsApp Confirmation Flow)
 """
+
+import threading
 
 from config.settings import (
     MAX_HISTORY_TURNS, DEFAULT_MODE,
@@ -25,13 +27,15 @@ CONFIRM_WORDS = {
     "haan", "haa", "ha", "yes", "yep", "yeah", "ok", "okay",
     "bhej do", "bhej de", "send karo", "send kar do", "kar do",
     "bol do", "likh do", "theek hai", "thik hai", "chalo", "done",
-    "sure", "go ahead", "sahi hai", "bilkul",
+    "sure", "go ahead", "sahi hai", "bilkul", "haanji", "ji haan",
+    "approve", "approved", "confirm", "confirmed", "send",
 }
 
 # Words that mean "no" / "cancel"
 CANCEL_WORDS = {
-    "nahi", "nah", "no", "mat", "cancel", "ruk", "ruko",
-    "mat bhejo", "mat karo", "chhod do", "rehne do", "band karo",
+    "nahi", "nah", "no", "mat bhejo", "mat karo", "cancel", "ruk", "ruko",
+    "chhod do", "rehne do", "band karo", "stop", "abort", "reject",
+    "rehne", "rukk", "nope",
 }
 
 
@@ -90,39 +94,61 @@ class LisaAgent:
             self.conversation_history = self.conversation_history[-max_msgs:]
 
     def _maybe_extract_memory(self) -> None:
-        """Har EXTRACT_EVERY turns pe memory extract karo."""
         if self.turn_count > 0 and self.turn_count % EXTRACT_EVERY == 0:
             print(f"  [Memory] Extracting facts from conversation...")
             extract_and_save(self.conversation_history)
 
     # ── WhatsApp confirmation ─────────────────────────────────────────
 
-    def _handle_whatsapp_confirm(self, user_message: str) -> str | None:
+    def _is_confirm(self, msg: str) -> bool:
+        m = msg.lower().strip()
+        # Exact match check (avoid "nahi" matching "haan nahi")
+        words = m.split()
+        for w in words:
+            if w in CONFIRM_WORDS:
+                # Also check no cancel word in msg
+                if not any(c in m for c in CANCEL_WORDS):
+                    return True
+        # Phrase check
+        for phrase in CONFIRM_WORDS:
+            if " " in phrase and phrase in m:
+                if not any(c in m for c in CANCEL_WORDS):
+                    return True
+        return False
+
+    def _is_cancel(self, msg: str) -> bool:
+        m = msg.lower().strip()
+        for w in m.split():
+            if w in CANCEL_WORDS:
+                return True
+        for phrase in CANCEL_WORDS:
+            if " " in phrase and phrase in m:
+                return True
+        return False
+
+    def _handle_whatsapp_confirm(self, user_message: str):
         """
-        Agar koi pending WhatsApp action hai, toh user ka response check karo.
-        Returns reply string if handled, None if not a confirmation situation.
+        Pending WhatsApp action ho toh user response process karo.
+        Returns reply string if handled, None otherwise.
         """
         if self.pending_whatsapp is None:
             return None
 
-        msg_lower = user_message.lower().strip()
+        # User wants to EDIT the draft? e.g. "isme add kar do ki..."
+        # For now we treat any non-confirm/non-cancel as cancellation of pending
+        # so user can re-issue the request properly.
 
-        # Check if user confirmed
-        is_confirm = any(word in msg_lower for word in CONFIRM_WORDS)
-        is_cancel  = any(word in msg_lower for word in CANCEL_WORDS)
+        if self._is_cancel(user_message):
+            self.pending_whatsapp = None
+            return "Theek hai jaan, cancel kar diya. Nahi bhejungi."
 
-        if is_cancel or (not is_confirm and not is_cancel):
-            # Cancel or unrelated message -- clear pending and let normal flow handle
-            if is_cancel:
-                self.pending_whatsapp = None
-                return "Okay jaan, cancel kar diya. Nahi bhejungi!"
-            else:
-                # Not a clear yes/no -- could be something else entirely
-                # Clear pending and process normally
-                self.pending_whatsapp = None
-                return None
+        if not self._is_confirm(user_message):
+            # Not a clear yes/no -- could be edit request or unrelated
+            # Clear pending and let normal flow handle
+            self.pending_whatsapp = None
+            return None
 
-        # User confirmed -- execute the pending action
+        # User confirmed -- execute pending action in background
         pending = self.pending_whatsapp
         self.pending_whatsapp = None
 
@@ -132,14 +158,34 @@ class LisaAgent:
         contact     = pending.get("contact", "")
         content     = pending.get("content", "")
 
-        success, result_msg = whatsapp_confirm_and_send(action_type, contact, content)
+        # Background thread mein send karo taaki UI block na ho
+        result_holder = {"success": False, "msg": "send mein time lag rha hai..."}
+        done_event = threading.Event()
 
-        if success:
-            return f"Bhej diya jaan! {result_msg}"
+        def _do_send():
+            try:
+                s, m = whatsapp_confirm_and_send(action_type, contact, content)
+                result_holder["success"] = s
+                result_holder["msg"]     = m
+            except Exception as e:
+                result_holder["msg"] = f"error: {e}"
+            finally:
+                done_event.set()
+
+        t = threading.Thread(target=_do_send, daemon=True)
+        t.start()
+
+        # Wait up to 15s for send to complete
+        done_event.wait(timeout=15)
+
+        if result_holder["success"]:
+            return f"Bhej diya jaan! {result_holder['msg']}"
+        elif done_event.is_set():
+            return f"Yaar bhej nahi paayi -- {result_holder['msg']}"
         else:
-            return f"Yaar bhej nahi paayi -- {result_msg}"
+            return "Send kar rhi hoon background mein, ho jayega thodi der mein."
 
-    def _check_whatsapp_confirmation(self, action_msg: str) -> tuple[bool, str] | None:
+    def _check_whatsapp_confirmation(self, action_msg: str):
         """
         Check if action_msg is a WhatsApp confirmation request.
         If yes, store pending action and return confirmation prompt.
@@ -150,19 +196,18 @@ class LisaAgent:
         parts = action_msg.split("|")
 
         if action_msg.startswith("CONFIRM_WHATSAPP_MSG"):
-            # Format: CONFIRM_WHATSAPP_MSG|contact|message
             if len(parts) >= 3:
                 contact = parts[1]
-                message = parts[2]
+                # Message may contain | -- rejoin remaining parts
+                message = "|".join(parts[2:])
                 self.pending_whatsapp = {
                     "type": "message",
                     "contact": contact,
                     "content": message,
                 }
-                return True, f"'{contact}' ko ye message bhejun: \"{message}\"? (haan/nahi)"
+                return True, contact, message, "message"
 
         elif action_msg.startswith("CONFIRM_WHATSAPP_FILE"):
-            # Format: CONFIRM_WHATSAPP_FILE|contact|file_path|file_name
             if len(parts) >= 4:
                 contact   = parts[1]
                 file_path = parts[2]
@@ -172,7 +217,7 @@ class LisaAgent:
                     "contact": contact,
                     "content": file_path,
                 }
-                return True, f"'{contact}' ko '{file_name}' bhejun WhatsApp pe? (haan/nahi)"
+                return True, contact, file_name, "file"
 
         return None
 
@@ -188,7 +233,7 @@ class LisaAgent:
         # Periodic memory extraction
         self._maybe_extract_memory()
 
-        # ── Check if user is responding to WhatsApp confirmation ──────
+        # ── Step 1: Check if user is responding to WhatsApp confirmation ──
         confirm_reply = self._handle_whatsapp_confirm(user_message)
         if confirm_reply is not None:
             self.conversation_history.append({"role": "user",      "content": user_message})
@@ -196,31 +241,42 @@ class LisaAgent:
             self._trim_history()
             return confirm_reply
 
-        # Check for action
-        action_result = route_action(user_message)
-
+        # ── Step 2: Detect & route action ──
+        action_result = route_action(user_message, context=self.conversation_history)
         system_prompt = self._build_system_prompt(user_message)
 
         if action_result is not None:
             success, action_msg = action_result
 
-            # ── WhatsApp confirmation check ──────────────────────────
+            # ── WhatsApp confirmation flow ──
             wa_confirm = self._check_whatsapp_confirmation(action_msg)
             if wa_confirm is not None:
-                _, confirm_prompt = wa_confirm
-                # Let LLM phrase the confirmation naturally
-                augmented = (
-                    f"{user_message}\n\n"
-                    f"[System: WhatsApp pe bhejne se pehle confirm karo. "
-                    f"{confirm_prompt} "
-                    f"Natural Hinglish mein poochho user se — short mein.]"
-                )
+                _, contact, content, kind = wa_confirm
+
+                if kind == "message":
+                    # Show the drafted message clearly + ask confirmation
+                    augmented = (
+                        f"{user_message}\n\n"
+                        f"[System: WhatsApp message draft kiya hai '{contact}' ke liye:\n"
+                        f"\"{content}\"\n"
+                        f"User se confirmation maango -- short, natural Hinglish mein. "
+                        f"Pehle draft dikhao, fir poochho 'send kar du?'. "
+                        f"Apni taraf se kuch add mat karo, jo draft hai bas wahi dikhao.]"
+                    )
+                else:  # file
+                    augmented = (
+                        f"{user_message}\n\n"
+                        f"[System: WhatsApp pe '{contact}' ko '{content}' file bhejni hai. "
+                        f"User se confirm maango -- short Hinglish.]"
+                    )
+
                 reply = get_response(system_prompt, self.conversation_history, augmented)
                 self.conversation_history.append({"role": "user",      "content": user_message})
                 self.conversation_history.append({"role": "assistant", "content": reply})
                 self._trim_history()
                 return reply
 
+            # ── Normal action result ──
             status = "successfully completed" if success else "failed"
             augmented = (
                 f"{user_message}\n\n"
@@ -240,10 +296,6 @@ class LisaAgent:
     # ── Session end ───────────────────────────────────────────────────
 
     def end_session(self) -> None:
-        """
-        Session band hone par call karo — final memory extract hoga.
-        main.py aur voice_main.py mein /quit pe ye call hoga.
-        """
         # Close WhatsApp browser if open
         try:
             from actions.whatsapp_actions import close_driver

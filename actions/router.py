@@ -1,5 +1,8 @@
 """
-LISA — Action Router
+LISA — Action Router (v2)
+===========================
+Change: whatsapp_message action ab conversation context pass karta hai
+taaki LLM mood/tone/intention properly samjhe.
 """
 
 from actions.intent_detector import detect_intent
@@ -30,11 +33,15 @@ ACTION_MAP = {
     "system_command"    : system_command,
 }
 
-# Actions that need special param handling (not just "query")
 SPECIAL_PARAM_ACTIONS = {"find_file", "whatsapp_message", "whatsapp_file"}
 
 
-def route_action(user_message: str) -> tuple[bool, str] | None:
+def route_action(user_message: str, context=None) -> tuple[bool, str] | None:
+    """
+    user_message : jo Manish ne kaha
+    context      : conversation history list — agent.py se pass karo.
+                   Yahi LLM ko mood/tone/intention samajhne mein help karta hai.
+    """
     intent     = detect_intent(user_message)
     action     = intent.get("action", "none")
     params     = intent.get("params", {})
@@ -47,25 +54,33 @@ def route_action(user_message: str) -> tuple[bool, str] | None:
     if not action_fn:
         return None
 
-    # ── Special param handling for complex actions ────────────────
+    # ── Special param handling ─────────────────────────────────────
     if action in SPECIAL_PARAM_ACTIONS:
         try:
             if action == "find_file":
-                folder         = params.get("folder", "")
-                file           = params.get("file", "")
-                on_main_screen = params.get("main_screen", False)
-                return action_fn(query=user_message, folder=folder, file=file, on_main_screen=on_main_screen)
+                return action_fn(
+                    query        = user_message,
+                    folder       = params.get("folder", ""),
+                    file         = params.get("file", ""),
+                    on_main_screen = params.get("main_screen", False),
+                )
 
             elif action == "whatsapp_message":
-                contact = params.get("contact", "")
-                message = params.get("message", "")
-                return action_fn(query=user_message, contact=contact, message=message)
+                return action_fn(
+                    contact = params.get("contact", ""),
+                    query   = user_message,        # full raw message — intent ke liye
+                    message = params.get("message", ""),
+                    context = context,             # ← YE NAYA: mood/tone ke liye
+                )
 
             elif action == "whatsapp_file":
-                contact = params.get("contact", "")
-                folder  = params.get("folder", "")
-                file    = params.get("file", "")
-                return action_fn(query=user_message, contact=contact, folder=folder, file=file)
+                return action_fn(
+                    contact = params.get("contact", ""),
+                    folder  = params.get("folder", ""),
+                    file    = params.get("file", ""),
+                    query   = user_message,
+                    context = context,
+                )
 
         except Exception as e:
             print(f"[Router] Error: {e}")
