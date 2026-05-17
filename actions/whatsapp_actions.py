@@ -490,12 +490,16 @@ class WhatsAppDriver:
                         best_span = span
                         best_title = title
 
-                # Accept fuzzy match if score >= 75
-                if best_score >= 75 and best_span is not None:
+                # Accept fuzzy match if score >= 85 (75 was too loose — garbage matches)
+                # Better to say "contact nahi mila" than send to WRONG person/group
+                if best_score >= 85 and best_span is not None:
                     if self._click_parent_row(best_span):
                         _delay(0.4, 0.6)
                         print(f"  [✓] Contact mila (fuzzy {best_score}%): '{best_title}'")
                         return True
+                elif best_score >= 70 and best_span is not None:
+                    # Log warning but DON'T auto-accept — too risky
+                    print(f"  [⚠] Low confidence match ({best_score}%): '{best_title}' — skipping (threshold 85%)")
             except ImportError:
                 pass  # rapidfuzz not available, skip fuzzy
 
@@ -605,9 +609,10 @@ class WhatsAppDriver:
         if self.driver:
             try:
                 self.driver.quit()
-            except Exception:
-                # ConnectionRefusedError, WebDriverException etc.
-                # Browser already dead / user closed it / Ctrl+C
+            except BaseException:
+                # BaseException catches EVERYTHING including KeyboardInterrupt
+                # ConnectionRefusedError, WebDriverException, KeyboardInterrupt etc.
+                # Browser already dead / user closed it / Ctrl+C — sab handle
                 pass
             finally:
                 self.driver = None
@@ -910,37 +915,33 @@ def _do_send_file(contact: str, file_path: str) -> tuple:
         # ══════════════════════════════════════════════════════════════
         doc_input.send_keys(abs_path)
         print(f"  [WhatsApp] File path diya: {os.path.basename(abs_path)}")
-        _delay(3.0, 4.0)  # Preview load time
+
+        # Close the native file picker dialog (OS-level window, not browser element)
+        # IMPORTANT: Do NOT send Keys.ESCAPE to browser — that closes the file
+        # PREVIEW dialog (which has the send button we need!)
+        # Instead, use OS-level SendKeys to close the native "Open" dialog.
+        _delay(0.8, 1.2)
+        try:
+            import subprocess
+            subprocess.run(
+                ['powershell', '-Command',
+                 '(New-Object -ComObject WScript.Shell).SendKeys("{ESC}")'],
+                timeout=3, capture_output=True
+            )
+        except Exception:
+            pass  # File picker stays open but doesn't block anything
+
+        _delay(2.5, 3.5)  # Preview load time
 
         # ══════════════════════════════════════════════════════════════
         # Step 5: Click send button
         # ══════════════════════════════════════════════════════════════
         fname = os.path.basename(abs_path)
 
-        # Strategy 1: CSS/XPath selectors
-        send_selectors = [
-            (By.CSS_SELECTOR, 'span[data-icon="send-light"]'),
-            (By.CSS_SELECTOR, 'span[data-icon="send"]'),
-            (By.CSS_SELECTOR, 'div[data-testid="send"]'),
-            (By.CSS_SELECTOR, 'div[data-testid="media-send"]'),
-            (By.CSS_SELECTOR, 'button[data-testid="send"]'),
-            (By.XPATH,        '//div[@aria-label="Send"]'),
-            (By.XPATH,        '//button[@aria-label="Send"]'),
-            (By.XPATH,        '//div[@role="button"][@aria-label="Send"]'),
-        ]
-        send_btn = _find_element(driver, send_selectors, timeout=8)
-        if send_btn:
-            try:
-                send_btn.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", send_btn)
-            _delay(1.5, 2.5)
-            print(f"  [✓] File bhej di: {fname}")
-            return (True, f"{fname} bhej di {contact} ko!")
-
-        # Strategy 2: JS click any send icon
-        print("  [WhatsApp] Selectors fail, JS send try...")
+        # Strategy 1 (PRIMARY): JS click — most reliable on current WhatsApp Web
+        # CSS selectors break frequently, JS data-icon search is stable
         js_clicked = driver.execute_script("""
+            // Try send icons by data-icon attribute
             let icons = ['send-light', 'send'];
             for (let icon of icons) {
                 let el = document.querySelector(`span[data-icon="${icon}"]`);
@@ -950,10 +951,12 @@ def _do_send_file(contact: str, file_path: str) -> tuple:
                     return 'clicked:' + icon;
                 }
             }
+            // Try aria-label="Send"
             let sendEls = document.querySelectorAll('[aria-label="Send"]');
             for (let el of sendEls) {
                 if (el.offsetParent !== null) { el.click(); return 'clicked:aria'; }
             }
+            // Try any button with send icon
             let allBtns = document.querySelectorAll('div[role="button"], button');
             for (let btn of allBtns) {
                 let icon = btn.querySelector('span[data-icon]');
@@ -965,7 +968,27 @@ def _do_send_file(contact: str, file_path: str) -> tuple:
         """)
         if js_clicked:
             _delay(1.5, 2.5)
-            print(f"  [✓] File bhej di (JS {js_clicked}): {fname}")
+            print(f"  [✓] File bhej di: {fname}")
+            return (True, f"{fname} bhej di {contact} ko!")
+
+        # Strategy 2 (FALLBACK): CSS/XPath selectors
+        print("  [WhatsApp] JS fail, CSS selector try...")
+        send_selectors = [
+            (By.CSS_SELECTOR, 'span[data-icon="send-light"]'),
+            (By.CSS_SELECTOR, 'span[data-icon="send"]'),
+            (By.CSS_SELECTOR, 'div[data-testid="send"]'),
+            (By.CSS_SELECTOR, 'div[data-testid="media-send"]'),
+            (By.XPATH,        '//div[@aria-label="Send"]'),
+            (By.XPATH,        '//button[@aria-label="Send"]'),
+        ]
+        send_btn = _find_element(driver, send_selectors, timeout=5)
+        if send_btn:
+            try:
+                send_btn.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", send_btn)
+            _delay(1.5, 2.5)
+            print(f"  [✓] File bhej di: {fname}")
             return (True, f"{fname} bhej di {contact} ko!")
 
         # Strategy 3: Enter key

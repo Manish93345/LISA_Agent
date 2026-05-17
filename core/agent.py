@@ -268,7 +268,9 @@ class LisaAgent:
                     augmented = (
                         f"{user_message}\n\n"
                         f"[System: WhatsApp pe '{contact}' ko '{content}' file bhejni hai. "
-                        f"User se confirm maango -- short Hinglish.]"
+                        f"User se confirm maango -- ZAROOR clearly mention karo ki KISKO bhej rhi ho "
+                        f"('{contact}') aur KYA file bhej rhi ho ('{content}'). "
+                        f"Short Hinglish mein poochho.]"
                     )
 
                 reply = get_response(system_prompt, self.conversation_history, augmented)

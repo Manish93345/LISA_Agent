@@ -68,11 +68,33 @@ Examples:
 "D drive mein projects mein web development mein portfolio khol do" -> {"action": "find_file", "params": {"folder": "projects/web development", "file": "portfolio", "main_screen": false}, "confidence": 0.95}
 
 ══════════════════════════════════════════════════════════════
+CONTACT NAME RULE (MOST CRITICAL — WRONG CONTACT = TRUST BREAK)
+══════════════════════════════════════════════════════════════
+
+User jab WhatsApp pe kisi ko message/file bhejne bole, "contact" param mein HAMESHA
+wo naam dena jo WhatsApp pe SAVED hai, generic relationship word NAHI.
+
+RULE: Agar user SAVED NAAM bataye ("X se save hai", "X naam se saved hai",
+"maine X se save kiya", "X ke naam se hai"), toh:
+  contact = X (saved naam)
+  KABHI "dost", "friend", "bhai", "yaar" jaise generic words mat dena.
+
+Examples of SAVED NAME extraction:
+  "mere dost ko bhejo, sugri se save hai" → contact = "sugri" (NOT "dost")
+  "meri friend ko, sara naam se save hai" → contact = "sara" (NOT "friend")
+  "yaar ko message karo, uska naam raushan se saved hai" → contact = "raushan" (NOT "yaar")
+  "bhai ko bhej do, maine aniket se save kiya hua hai" → contact = "aniket" (NOT "bhai")
+
+Agar user SIRF relationship word bole bina saved naam ke:
+  "didi ko message karo" → contact = "didi" (koi aur naam nahi bataya)
+  "mummy ko bol do" → contact = "mummy"
+
+══════════════════════════════════════════════════════════════
 WHATSAPP MESSAGE
 ══════════════════════════════════════════════════════════════
 
 Jab user WhatsApp message bhejne bole, params mein DO cheezein dena:
-  1. "contact" : kisko bhejna hai (just naam, lowercase)
+  1. "contact" : kisko bhejna hai — SAVED NAAM use karo (upar ka rule dekho)
   2. "message" : user ne kya convey karna chahta hai — RAW intent (draft mat karo)
 
 SIRF user ka intent likho message mein — draft mat karo. Drafting baad mein hogi.
@@ -83,6 +105,8 @@ Examples:
 "didi ko hello likh ke message karna" -> {"action": "whatsapp_message", "params": {"contact": "didi", "message": "hello"}, "confidence": 0.95}
 "Rahul bhai ko message karo ki kal milte hain coffee pe" -> {"action": "whatsapp_message", "params": {"contact": "rahul", "message": "kal milte hain coffee pe"}, "confidence": 0.9}
 "Sir ko bol do ki assignment kal tak submit kar dunga" -> {"action": "whatsapp_message", "params": {"contact": "sir", "message": "assignment kal tak submit kar dunga"}, "confidence": 0.9}
+"mere dost ko message karo ki main aa rha hoon, sugri se save kiya hua hai" -> {"action": "whatsapp_message", "params": {"contact": "sugri", "message": "main aa rha hoon"}, "confidence": 0.95}
+"friend ko bol do kal milte hain, uska naam sara se saved hai" -> {"action": "whatsapp_message", "params": {"contact": "sara", "message": "kal milte hain"}, "confidence": 0.95}
 
 ══════════════════════════════════════════════════════════════
 OTHER ACTIONS
@@ -96,6 +120,7 @@ play_youtube vs search_youtube:
 whatsapp_file:
 - "ye photo bhej do aniket ko", "file send karo" -> whatsapp_file
 - params mein "contact", "folder", "file"
+- contact: SAVED NAAM use karo (upar CONTACT NAME RULE dekho) — ye BAHUT important hai
 - NESTED FOLDERS: same rule — "X mein Y mein Z" → folder = "X/Y/Z"
 - GROUPS bhi contacts hain — "roommate group", "class group" etc.
 
@@ -104,6 +129,8 @@ Examples:
 "study folder mein sem 6 mein software engineering ka pyq solution ka pdf roommate group mein bhej do" -> {"action": "whatsapp_file", "params": {"contact": "roommate", "folder": "study/sem 6/software engineering", "file": "pyq solution"}, "confidence": 0.95}
 "D drive se movies folder mein se inception aniket ko bhejo" -> {"action": "whatsapp_file", "params": {"contact": "aniket", "folder": "movies", "file": "inception"}, "confidence": 0.95}
 "resume pdf class group mein send karo" -> {"action": "whatsapp_file", "params": {"contact": "class", "folder": "", "file": "resume pdf"}, "confidence": 0.95}
+"downloads mein admit card hai, mere dost ko bhej do sugri se save kiya hua hai" -> {"action": "whatsapp_file", "params": {"contact": "sugri", "folder": "downloads", "file": "admit card"}, "confidence": 0.95}
+"ye file friend ko bhejo, raushan naam se saved hai" -> {"action": "whatsapp_file", "params": {"contact": "raushan", "folder": "", "file": ""}, "confidence": 0.9}
 
 Other examples:
 "Arijit Singh ka gaana chala do" -> {"action": "play_youtube", "params": {"query": "Arijit Singh best songs"}, "confidence": 0.95}
