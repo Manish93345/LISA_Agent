@@ -248,7 +248,7 @@ def smart_find_and_open(query: str, folder: str = "", file: str = "", on_main_sc
             return False, f"file khulne mein error: {e}"
 
     # ── Open on Desktop 3 (default — background mein) ────────────────
-    from actions.desktop_manager import get_status, open_file_on_lisa_desktop, launch_on_lisa_desktop
+    from actions.desktop_manager import get_status, open_file_on_lisa_desktop
 
     status = get_status()
     if not status["ready"]:
@@ -256,31 +256,17 @@ def smart_find_and_open(query: str, folder: str = "", file: str = "", on_main_sc
         os.startfile(path)
         return True, f"{message}, khol diya! (Desktop 3 ready nahi tha)"
 
-    is_folder = os.path.isdir(path)
+    # Window-snapshot approach: works for BOTH files and folders
+    # (PID-based approach fails for explorer.exe because it reuses instances)
+    import threading
 
-    if is_folder:
-        # Folders ke liye explorer.exe launch karo via PID method (works for explorer)
-        process = launch_on_lisa_desktop(
-            ["explorer.exe", path],
-            wait=2.0
-        )
-        if process:
-            return True, f"{message}, background mein khol diya!"
-        else:
-            os.startfile(path)
-            return True, f"{message}, khol diya!"
-    else:
-        # Files ke liye naya window-detection approach use karo
-        # Background thread mein karo taaki Lisa block na ho
-        import threading
+    def _open_in_background():
+        moved = open_file_on_lisa_desktop(path, wait=3.0)
+        if not moved:
+            print(f"  [Desktop] Desktop 3 pe move nahi hua, main screen pe khula hoga")
 
-        def _open_in_background():
-            moved = open_file_on_lisa_desktop(path, wait=3.0)
-            if not moved:
-                print(f"  [Desktop] Desktop 3 pe move nahi hua, main screen pe khula hoga")
+    thread = threading.Thread(target=_open_in_background, daemon=True)
+    thread.start()
 
-        thread = threading.Thread(target=_open_in_background, daemon=True)
-        thread.start()
-
-        file_name = os.path.basename(path)
-        return True, f"{message}, background mein khol rhi hoon!"
+    item_type = "folder" if os.path.isdir(path) else os.path.basename(path)
+    return True, f"{message}, background mein khol rhi hoon!"

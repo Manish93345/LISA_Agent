@@ -197,11 +197,11 @@ def smart_whatsapp_send(
     relationship: str = "",
 ) -> tuple:
     """
-    Full flow: draft → confirm → send.
+    NON-INTERACTIVE: Sirf draft karta hai — confirmation caller handle karta hai.
 
-    Returns tuple (bool, str) — agent.py ko yahi chahiye.
-      (True,  "Message bhej diya!")
-      (False, "reason")
+    Returns tuple (bool, str):
+      (True,  drafted_message_text)
+      (False, "error reason")
     """
 
     # ── Contact info ──────────────────────────────────────────────────
@@ -216,65 +216,13 @@ def smart_whatsapp_send(
     if not info or info.get("relationship", "default") == "default":
         auto_learn_contact(contact, rel, full_name)
 
-    print(f"\n  [Lisa] '{full_name}' ko message draft kar rhi hoon...")
-    print(f"  [Lisa] Tone: {rel}")
-
     # ── Draft ─────────────────────────────────────────────────────────
     try:
         drafted = draft_message(full_name, intent, rel)
     except Exception as e:
         return (False, f"Draft error: {e}")
 
-    # ── Preview + Confirm ─────────────────────────────────────────────
-    print(f"\n  ┌─ Drafted Message — {full_name} {'─'*20}")
-    for line in drafted.split('\n'):
-        print(f"  │  {line}")
-    print(f"  └{'─'*45}")
-
-    confirm = input("\n  Ye message bhejun? (y/n/e): ").strip().lower()
-
-    if confirm == 'n':
-        return (False, "Cancel kar diya")
-
-    if confirm == 'e':
-        print("  Apna message likho (blank line press karo done ke liye):")
-        lines = []
-        while True:
-            line = input()
-            if line == "" and lines and lines[-1] == "":
-                break
-            lines.append(line)
-        drafted = '\n'.join(lines[:-1]) if lines else drafted
-        if input("  Ab bhejun? (y/n): ").strip().lower() != 'y':
-            return (False, "Cancel kar diya")
-
-    # ── Send ──────────────────────────────────────────────────────────
-    from actions.whatsapp_actions import WhatsAppDriver
-
-    driver_created = False
-    if wa_driver is None:
-        wa_driver = WhatsAppDriver()
-        if not wa_driver.start():
-            return (False, "Browser start nahi hua")
-        driver_created = True
-
-    try:
-        orig = settings.WHATSAPP_CONFIRM_SEND
-        settings.WHATSAPP_CONFIRM_SEND = False
-
-        if not wa_driver.search_and_open_contact(contact):
-            return (False, f"'{contact}' WhatsApp pe nahi mila")
-
-        sent = wa_driver.send_message(drafted)
-        settings.WHATSAPP_CONFIRM_SEND = orig
-
-        if sent:
-            return (True, f"{full_name} ko message bhej diya ✓")
-        return (False, "Send fail")
-
-    finally:
-        if driver_created:
-            wa_driver.close()
+    return (True, drafted)
 
 
 # ══════════════════════════════════════════════════════════════════════

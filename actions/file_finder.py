@@ -257,6 +257,67 @@ def find_folder(folder_hint: str, search_root: str = None) -> tuple[str | None, 
     return best_path, int(best_score)
 
 
+def find_folder_chain(chain: list[str]) -> tuple[str | None, int]:
+    """
+    Resolve a chain of folder names step by step.
+    ['study', 'sem 6', 'software engineering']
+    → D:\Study → D:\Study\Sem 6 → D:\Study\Sem 6\Software Engineering
+
+    Args:
+        chain: list of folder names to resolve in sequence
+
+    Returns:
+        (resolved_path, avg_score) or (None, 0)
+    """
+    if not chain:
+        return None, 0
+
+    # Step 1: Resolve first folder from SEARCH_ROOTS
+    current_path, score = find_folder(chain[0])
+    if current_path is None:
+        return None, 0
+
+    total_score = score
+
+    # Step 2: Resolve remaining folders inside previous result
+    for i, subfolder_hint in enumerate(chain[1:], 1):
+        hint_norm = _normalize(subfolder_hint)
+
+        # Scan only immediate children of current folder
+        subfolders = []
+        try:
+            with os.scandir(current_path) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False) and not _should_skip(entry.name):
+                        subfolders.append((_normalize(entry.name), entry.path))
+        except (PermissionError, OSError):
+            return None, 0
+
+        if not subfolders:
+            print(f"  [FileFinder] Chain step {i}: '{subfolder_hint}' — no subfolders in {Path(current_path).name}")
+            return None, 0
+
+        names = [f[0] for f in subfolders]
+        result = process.extractOne(
+            hint_norm,
+            names,
+            scorer=fuzz.WRatio,
+            score_cutoff=FOLDER_MATCH_THRESHOLD
+        )
+
+        if result is None:
+            print(f"  [FileFinder] Chain step {i}: '{subfolder_hint}' — no match in {Path(current_path).name}")
+            return None, 0
+
+        matched_name, sub_score, idx = result
+        current_path = subfolders[idx][1]
+        total_score += sub_score
+        print(f"  [FileFinder] Chain step {i}: '{subfolder_hint}' -> '{Path(current_path).name}' (score: {sub_score})")
+
+    avg_score = total_score / len(chain)
+    return current_path, int(avg_score)
+
+
 def find_file(file_hint: str, folder_path: str = None) -> tuple[str | None, int]:
     """
     Fuzzy match file name.
@@ -285,11 +346,15 @@ def find_file(file_hint: str, folder_path: str = None) -> tuple[str | None, int]
         scan_targets = SEARCH_ROOTS
 
     # Collect all files
+    # Depth logic:
+    #   - With folder resolved via chain: depth=2 (already narrowed)
+    #   - With single folder: depth=2
+    #   - No folder (global search): depth=3
     all_files: list[tuple[str, str]] = []
     for target in scan_targets:
         if not os.path.isdir(target):
             continue
-        depth = 2 if not folder_path else 1
+        depth = 3 if not folder_path else 2
         all_files.extend(_scan_files(target, max_depth=depth))
 
     if not all_files:
@@ -341,7 +406,16 @@ def smart_find(
     resolved_folder = None
 
     if folder_hint:
-        resolved_folder, folder_score = find_folder(folder_hint)
+        # Check if folder_hint is a chain (contains /)
+        if "/" in folder_hint:
+            chain = [part.strip() for part in folder_hint.split("/") if part.strip()]
+            if len(chain) > 1:
+                resolved_folder, folder_score = find_folder_chain(chain)
+            else:
+                resolved_folder, folder_score = find_folder(chain[0])
+        else:
+            resolved_folder, folder_score = find_folder(folder_hint)
+
         if resolved_folder is None:
             return False, "", f"'{folder_hint}' naam ka koi folder nahi mila"
 
@@ -384,6 +458,28 @@ if __name__ == "__main__":
         ("downloads",       ""),
         ("desktop",         ""),
     ]
+
+    # Nested chain tests
+    chain_tests = [
+        # (folder_chain, file_hint)
+        ("study/sem 6/software engineering",  "pyq"),
+        ("study/sem 6",                       ""),
+    ]
+
+    print("\n  ── Nested Chain Tests ──")
+    for folder, file in chain_tests:
+        label = f"chain='{folder}'"
+        if file:
+            label += f", file='{file}'"
+        success, path, msg = smart_find(folder_hint=folder, file_hint=file)
+        status = "[OK]" if success else "[X]"
+        print(f"  {status} {label}")
+        print(f"     -> {msg}")
+        if path:
+            print(f"     -> {path}")
+        print()
+
+    print("  ── Single Folder Tests ──")
 
     for folder, file in test_cases:
         label = f"folder='{folder}'"

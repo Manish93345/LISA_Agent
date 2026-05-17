@@ -175,8 +175,9 @@ class LisaAgent:
         t = threading.Thread(target=_do_send, daemon=True)
         t.start()
 
-        # Wait up to 15s for send to complete
-        done_event.wait(timeout=15)
+        # Wait time: messages = 20s, files = 45s (file upload takes longer)
+        timeout = 45 if action_type == "file" else 20
+        done_event.wait(timeout=timeout)
 
         if result_holder["success"]:
             return f"Bhej diya jaan! {result_holder['msg']}"
