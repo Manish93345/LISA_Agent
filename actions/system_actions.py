@@ -181,8 +181,9 @@ def open_file(query: str) -> tuple[bool, str]:
 # ── System commands ───────────────────────────────────────────────────
 
 def system_command(query: str) -> tuple[bool, str]:
-    q = query.lower()
+    q = query.lower().strip()
 
+    # ── Screenshot ────────────────────────────────────────────────────
     if "screenshot" in q:
         try:
             import datetime
@@ -201,17 +202,280 @@ def system_command(query: str) -> tuple[bool, str]:
         except Exception:
             return False, "screenshot nahi le payi"
 
-    elif any(x in q for x in ["volume up","volume badhao"]):
-        subprocess.run(["powershell","-c","$wsh=New-Object -ComObject WScript.Shell;$wsh.SendKeys([char]175)"],shell=True)
+    # ── Volume Up ─────────────────────────────────────────────────────
+    elif any(x in q for x in ["volume up", "volume badhao", "volume badha",
+                               "awaz badhao", "awaz badha"]):
+        subprocess.run(["powershell", "-c",
+            "$wsh=New-Object -ComObject WScript.Shell;$wsh.SendKeys([char]175)"],
+            shell=True)
         return True, "volume badha diya!"
 
-    elif any(x in q for x in ["volume down","volume kam","volume ghata"]):
-        subprocess.run(["powershell","-c","$wsh=New-Object -ComObject WScript.Shell;$wsh.SendKeys([char]174)"],shell=True)
+    # ── Volume Down ───────────────────────────────────────────────────
+    elif any(x in q for x in ["volume down", "volume kam", "volume ghata",
+                               "awaz kam", "awaz ghata"]):
+        subprocess.run(["powershell", "-c",
+            "$wsh=New-Object -ComObject WScript.Shell;$wsh.SendKeys([char]174)"],
+            shell=True)
         return True, "volume ghata diya!"
 
-    elif "mute" in q:
-        subprocess.run(["powershell","-c","$wsh=New-Object -ComObject WScript.Shell;$wsh.SendKeys([char]173)"],shell=True)
+    # ── Volume Mute ───────────────────────────────────────────────────
+    elif "mute" in q or "chup" in q:
+        subprocess.run(["powershell", "-c",
+            "$wsh=New-Object -ComObject WScript.Shell;$wsh.SendKeys([char]173)"],
+            shell=True)
         return True, "mute kar diya!"
+
+    # ── Volume Set (specific percentage) ──────────────────────────────
+    elif "volume" in q:
+        import re
+        match = re.search(r'(\d+)', q)
+        if match:
+            level = min(100, max(0, int(match.group(1))))
+
+            # Method 1: pycaw (Python Windows Audio API — most reliable)
+            try:
+                from pycaw.pycaw import AudioUtilities
+
+                speakers = AudioUtilities.GetSpeakers()
+                volume = speakers.EndpointVolume
+                volume.SetMasterVolumeLevelScalar(level / 100.0, None)
+                return True, f"volume {level}% kar diya!"
+            except Exception as e:
+                print(f"  [Volume] pycaw error: {e}")
+
+            # Method 2: nircmd fallback
+            try:
+                subprocess.run(
+                    ["nircmd", "setsysvolume", str(int(level * 655.35))],
+                    capture_output=True, timeout=3
+                )
+                return True, f"volume {level}% kar diya!"
+            except Exception:
+                pass
+
+            return False, f"volume set nahi hua — try: 'volume badhao' ya 'volume kam karo'"
+        return False, "volume level samajh nahi aayi (e.g., 'volume 50')"
+
+    # ── Brightness ────────────────────────────────────────────────────
+    elif any(x in q for x in ["brightness", "roushni", "roshni", "screen light"]):
+        import re
+        match = re.search(r'(\d+)', q)
+
+        if any(x in q for x in ["kam", "down", "low", "ghata", "dark"]):
+            level = 30  # dim
+        elif any(x in q for x in ["badha", "up", "high", "zyada", "bright", "max"]):
+            level = 90  # bright
+        elif match:
+            level = min(100, max(0, int(match.group(1))))
+        else:
+            level = 50  # default medium
+
+        try:
+            ps_cmd = (
+                f"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods)"
+                f".WmiSetBrightness(1,{level})"
+            )
+            result = subprocess.run(
+                ["powershell", "-c", ps_cmd],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return True, f"brightness {level}% kar diya!"
+            else:
+                return False, f"brightness change nahi hui — laptop nahi hai ya driver issue"
+        except Exception as e:
+            return False, f"brightness error: {e}"
+
+    # ── WiFi ──────────────────────────────────────────────────────────
+    elif any(x in q for x in ["wifi", "wi-fi", "internet", "network"]):
+        if any(x in q for x in ["band", "off", "disable", "disconnect", "hatao"]):
+            try:
+                subprocess.run(
+                    ["netsh", "interface", "set", "interface", "Wi-Fi", "disable"],
+                    capture_output=True, timeout=5
+                )
+                return True, "WiFi band kar diya!"
+            except Exception:
+                return False, "WiFi band nahi hua — admin rights chahiye"
+        elif any(x in q for x in ["chalu", "on", "enable", "connect", "lagao", "start"]):
+            try:
+                subprocess.run(
+                    ["netsh", "interface", "set", "interface", "Wi-Fi", "enable"],
+                    capture_output=True, timeout=5
+                )
+                return True, "WiFi chalu kar diya!"
+            except Exception:
+                return False, "WiFi chalu nahi hua — admin rights chahiye"
+        else:
+            # WiFi status check
+            try:
+                result = subprocess.run(
+                    ["netsh", "interface", "show", "interface"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if "Connected" in result.stdout:
+                    return True, "WiFi connected hai!"
+                elif "Disconnected" in result.stdout:
+                    return True, "WiFi disconnected hai!"
+                else:
+                    return True, f"WiFi status: {result.stdout.strip()[:200]}"
+            except Exception:
+                return False, "WiFi status check nahi hua"
+
+    # ── Battery ───────────────────────────────────────────────────────
+    elif any(x in q for x in ["battery", "charge", "charging"]):
+        try:
+            ps_cmd = (
+                "(Get-WmiObject Win32_Battery | Select-Object "
+                "EstimatedChargeRemaining, BatteryStatus | ConvertTo-Json)"
+            )
+            result = subprocess.run(
+                ["powershell", "-c", ps_cmd],
+                capture_output=True, text=True, timeout=5
+            )
+            import json
+            data = json.loads(result.stdout.strip())
+            pct = data.get("EstimatedChargeRemaining", "?")
+            status_code = data.get("BatteryStatus", 0)
+            # BatteryStatus: 1=discharging, 2=AC/charging, 3-5=various
+            charging = "charging" if status_code == 2 else "discharging"
+            return True, f"battery {pct}% hai ({charging})"
+        except Exception:
+            # Fallback: maybe desktop PC (no battery)
+            try:
+                result = subprocess.run(
+                    ["powershell", "-c",
+                     "(Get-WmiObject Win32_Battery).EstimatedChargeRemaining"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.stdout.strip():
+                    return True, f"battery {result.stdout.strip()}% hai"
+                return True, "battery nahi mili — desktop PC hai shayad"
+            except Exception:
+                return False, "battery status nahi mil rha"
+
+    # ── Timer / Alarm ─────────────────────────────────────────────────
+    elif any(x in q for x in ["timer", "alarm", "remind", "yaad"]):
+        import re
+        match = re.search(r'(\d+)', q)
+        if match:
+            minutes = int(match.group(1))
+            seconds = minutes * 60
+
+            # Start timer in background thread
+            def _timer_done():
+                # Show Windows notification/toast
+                try:
+                    subprocess.run([
+                        "powershell", "-c",
+                        f"[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; "
+                        f"$n = New-Object System.Windows.Forms.NotifyIcon; "
+                        f"$n.Icon = [System.Drawing.SystemIcons]::Information; "
+                        f"$n.BalloonTipTitle = 'Lisa Timer'; "
+                        f"$n.BalloonTipText = '{minutes} minute ka timer complete ho gaya!'; "
+                        f"$n.Visible = $true; "
+                        f"$n.ShowBalloonTip(10000); "
+                        f"Start-Sleep -Seconds 10; "
+                        f"$n.Dispose()"
+                    ], timeout=20)
+                except Exception:
+                    pass
+                # Also play system beep
+                try:
+                    import winsound
+                    for _ in range(3):
+                        winsound.Beep(1000, 500)
+                        import time; time.sleep(0.3)
+                except Exception:
+                    pass
+
+            timer = threading.Timer(seconds, _timer_done)
+            timer.daemon = True
+            timer.start()
+            return True, f"{minutes} minute ka timer laga diya! Jab complete hoga toh bata dungi."
+        return False, "kitne minute ka timer? (e.g., 'timer 5 minute')"
+
+    # ── Close / Kill App ──────────────────────────────────────────────
+    elif any(x in q for x in ["close", "band karo", "band kar do", "kill",
+                               "hatao", "chhod do"]):
+        # Extract app name
+        app_keywords = ["close", "band karo", "band kar do", "kill",
+                        "hatao", "chhod do", "karo", "kar do"]
+        app_name = q
+        for kw in app_keywords:
+            app_name = app_name.replace(kw, "")
+        app_name = app_name.strip()
+
+        if not app_name:
+            return False, "kaunsa app band karna hai?"
+
+        # Map common names to process names
+        PROCESS_MAP = {
+            "chrome": "chrome.exe", "google chrome": "chrome.exe",
+            "edge": "msedge.exe", "microsoft edge": "msedge.exe",
+            "firefox": "firefox.exe",
+            "notepad": "notepad.exe", "notepad++": "notepad++.exe",
+            "vs code": "Code.exe", "vscode": "Code.exe",
+            "vlc": "vlc.exe",
+            "discord": "Discord.exe",
+            "telegram": "Telegram.exe",
+            "word": "WINWORD.EXE", "excel": "EXCEL.EXE",
+            "powerpoint": "POWERPNT.EXE",
+            "calculator": "Calculator.exe", "calc": "Calculator.exe",
+            "paint": "mspaint.exe",
+            "spotify": "Spotify.exe",
+            "zoom": "Zoom.exe",
+            "task manager": "Taskmgr.exe",
+        }
+
+        proc = PROCESS_MAP.get(app_name, f"{app_name}.exe")
+        try:
+            result = subprocess.run(
+                ["taskkill", "/IM", proc, "/F"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return True, f"{app_name} band kar diya!"
+            else:
+                return False, f"{app_name} nahi mila ya band nahi hua"
+        except Exception:
+            return False, f"{app_name} band nahi hua"
+
+    # ── Lock Screen ───────────────────────────────────────────────────
+    elif any(x in q for x in ["lock", "screen lock", "tala", "lock karo"]):
+        try:
+            subprocess.run(
+                ["rundll32.exe", "user32.dll,LockWorkStation"],
+                timeout=3
+            )
+            return True, "screen lock kar diya!"
+        except Exception:
+            return False, "lock nahi hua"
+
+    # ── Shutdown / Restart / Sleep ────────────────────────────────────
+    elif any(x in q for x in ["shutdown", "band karo computer", "shut down"]):
+        try:
+            subprocess.run(["shutdown", "/s", "/t", "30"], timeout=3)
+            return True, "30 second mein shutdown ho jayega! Cancel: shutdown /a"
+        except Exception:
+            return False, "shutdown nahi hua"
+
+    elif any(x in q for x in ["restart", "reboot"]):
+        try:
+            subprocess.run(["shutdown", "/r", "/t", "30"], timeout=3)
+            return True, "30 second mein restart hoga! Cancel: shutdown /a"
+        except Exception:
+            return False, "restart nahi hua"
+
+    elif any(x in q for x in ["sleep", "hibernate", "neend"]):
+        try:
+            subprocess.run(
+                ["powershell", "-c", "rundll32.exe powrprof.dll,SetSuspendState 0,1,0"],
+                timeout=3
+            )
+            return True, "sleep mode mein jaa rha hai!"
+        except Exception:
+            return False, "sleep nahi hua"
 
     return False, f"ye command samajh nahi aayi: {query}"
 

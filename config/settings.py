@@ -25,6 +25,7 @@ CLAUDE_API_KEY   = os.getenv("CLAUDE_API_KEY")
 
 # ══════════════════════════════════════════════════════════════════
 #  YE 3 LINES CHANGE KARO — PROVIDER, CHAT MODEL, INTENT MODEL
+#  Options: groq | gemini | cerebras | claude
 # ══════════════════════════════════════════════════════════════════
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
@@ -32,6 +33,7 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq")
 # Chat model — LISA jo use karegi baat karne ke liye
 CHAT_MODELS = {
     "groq"     : "llama-3.3-70b-versatile",
+    "gemini"   : "gemini-2.0-flash",
     "cerebras" : "llama3.1-8b",
     "claude"   : "claude-haiku-4-5-20251001",
 }
@@ -39,6 +41,7 @@ CHAT_MODELS = {
 # Intent model — action detect karne ke liye (fast + cheap)
 INTENT_MODELS = {
     "groq"     : "llama-3.3-70b-versatile",
+    "gemini"   : "gemini-2.0-flash",
     "cerebras" : "llama3.1-8b",
     "claude"   : "claude-haiku-4-5-20251001",
 }

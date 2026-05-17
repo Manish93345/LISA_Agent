@@ -130,60 +130,22 @@ Chhota aur clear rakho.
 # ══════════════════════════════════════════════════════════════════════
 
 def draft_message(contact_name: str, intent: str, relationship: str) -> str:
+    """Central LLM client se message draft karo — provider logic wahan hai."""
+    from core.llm_client import call_llm_simple
+
     tone_prompt = TONE_PROMPTS.get(relationship, TONE_PROMPTS["default"])
     user_prompt = (
         f"Contact: {contact_name}\n"
         f"Ye convey karna hai: {intent}\n\n"
         f"Sirf WhatsApp message text likho — koi explanation nahi, koi quotes nahi."
     )
-    provider = settings.LLM_PROVIDER
 
-    if provider == "groq":
-        from groq import Groq
-        client = Groq(api_key=settings.GROQ_API_KEY)
-        resp = client.chat.completions.create(
-            model=settings.CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": tone_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-            max_tokens=200, temperature=0.7,
-        )
-        return resp.choices[0].message.content.strip()
-
-    elif provider == "cerebras":
-        from cerebras.cloud.sdk import Cerebras
-        client = Cerebras(api_key=settings.CEREBRAS_API_KEY)
-        resp = client.chat.completions.create(
-            model=settings.CHAT_MODEL,
-            messages=[
-                {"role": "system", "content": tone_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-            max_tokens=200,
-        )
-        return resp.choices[0].message.content.strip()
-
-    elif provider == "claude":
-        import anthropic
-        client = anthropic.Anthropic(api_key=settings.CLAUDE_API_KEY)
-        resp = client.messages.create(
-            model=settings.CHAT_MODEL,
-            system=tone_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-            max_tokens=200,
-        )
-        return resp.content[0].text.strip()
-
-    elif provider == "gemini":
-        import google.generativeai as genai
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-1.5-flash",
-                                       system_instruction=tone_prompt)
-        return model.generate_content(user_prompt).text.strip()
-
-    else:
-        raise ValueError(f"Unknown provider: {provider}")
+    return call_llm_simple(
+        system_prompt=tone_prompt,
+        user_message=user_prompt,
+        temperature=0.7,
+        max_tokens=200,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════

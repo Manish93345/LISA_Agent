@@ -9,7 +9,9 @@ from google import genai
 from dotenv import load_dotenv
 
 load_dotenv()
-gemini_client   = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+# Lazy init — prevent crash if GEMINI_API_KEY missing at import time
+_gemini_client = None
 EMBEDDING_MODEL = "gemini-embedding-001"
 
 BASE_DIR        = Path(__file__).parent.parent
@@ -32,9 +34,19 @@ def _get_collection():
 
 
 def _embed(text: str):
+    global _gemini_client
+    if _gemini_client is None:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return None
+        try:
+            _gemini_client = genai.Client(api_key=api_key)
+        except Exception:
+            return None
+
     for attempt in range(3):
         try:
-            r = gemini_client.models.embed_content(
+            r = _gemini_client.models.embed_content(
                 model=EMBEDDING_MODEL, contents=text
             )
             return r.embeddings[0].values

@@ -1,8 +1,8 @@
 """
 LISA — Intent Detector
 =======================
-LLM_PROVIDER ke hisaab se Groq ya Cerebras use karta hai.
-Client lazy load hota hai — startup pe error nahi aayega.
+Centralized LLM client use karta hai — provider logic llm_client.py mein hai.
+Sirf .env mein LLM_PROVIDER change karo, ye automatically switch ho jayega.
 
 WHATSAPP MESSAGE:
 - Intent detector SIRF contact + raw intent extract karta hai
@@ -10,12 +10,7 @@ WHATSAPP MESSAGE:
 - Yahan se draft karne ki zaroorat NAHI hai
 """
 
-import json, os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
+import json
 
 INTENT_SYSTEM_PROMPT = """
 Tum ek intent detector ho. User ka message analyze karo aur decide karo ki koi action lena hai ya sirf conversation hai.
@@ -132,12 +127,63 @@ Examples:
 "downloads mein admit card hai, mere dost ko bhej do sugri se save kiya hua hai" -> {"action": "whatsapp_file", "params": {"contact": "sugri", "folder": "downloads", "file": "admit card"}, "confidence": 0.95}
 "ye file friend ko bhejo, raushan naam se saved hai" -> {"action": "whatsapp_file", "params": {"contact": "raushan", "folder": "", "file": ""}, "confidence": 0.9}
 
+══════════════════════════════════════════════════════════════
+SYSTEM COMMANDS (volume, brightness, WiFi, battery, timer, close app, lock, etc.)
+══════════════════════════════════════════════════════════════
+
+system_command ke liye query param mein descriptive text dena:
+
+FILLER WORDS RULE (IMPORTANT):
+User casually baat karta hai — "jaanu", "baby", "suno n", "please", "thoda" jaise
+words IGNORE karo. SIRF action words pe focus karo:
+- "jaanu suno baby volume 70 kar do please" → action = system_command, query = "volume 70"
+- "baby brightness kam kar do n" → action = system_command, query = "brightness down"
+- "jaan meri battery kitni hai" → action = system_command, query = "battery"
+Filler words: jaanu, jaan, baby, suno, please, thoda, n, na, yaar, bhai, etc.
+Ye sab IGNORE karo — sirf ACTION keyword dekho (volume, brightness, WiFi, timer, etc.)
+
+CLOSE APP RULE:
+- "X band karo", "X close karo", "X hatao" -> system_command (NOT open_app!)
+- "X khol do", "X open karo" -> open_app
+
+Examples:
+"screenshot lo" -> {"action": "system_command", "params": {"query": "screenshot"}, "confidence": 0.99}
+"volume badhao" -> {"action": "system_command", "params": {"query": "volume up"}, "confidence": 0.99}
+"volume kam karo" -> {"action": "system_command", "params": {"query": "volume down"}, "confidence": 0.99}
+"awaz kam karo" -> {"action": "system_command", "params": {"query": "volume down"}, "confidence": 0.99}
+"volume 50 karo" -> {"action": "system_command", "params": {"query": "volume 50"}, "confidence": 0.95}
+"volume 80% rakh do" -> {"action": "system_command", "params": {"query": "volume 80"}, "confidence": 0.95}
+"jaanu suno n baby, thoda volume ko 70 kar dogi baby please" -> {"action": "system_command", "params": {"query": "volume 70"}, "confidence": 0.95}
+"baby brightness thoda kam kar do n" -> {"action": "system_command", "params": {"query": "brightness down"}, "confidence": 0.95}
+"jaan meri battery kitni hai abhi" -> {"action": "system_command", "params": {"query": "battery"}, "confidence": 0.95}
+"suno n please 5 minute ka timer laga do baby" -> {"action": "system_command", "params": {"query": "timer 5"}, "confidence": 0.95}
+"yaar chrome band kar do please" -> {"action": "system_command", "params": {"query": "close chrome"}, "confidence": 0.95}
+"mute karo" -> {"action": "system_command", "params": {"query": "mute"}, "confidence": 0.99}
+"brightness badhao" -> {"action": "system_command", "params": {"query": "brightness up"}, "confidence": 0.95}
+"brightness kam karo" -> {"action": "system_command", "params": {"query": "brightness down"}, "confidence": 0.95}
+"brightness 70 karo" -> {"action": "system_command", "params": {"query": "brightness 70"}, "confidence": 0.95}
+"screen ki roshni kam karo" -> {"action": "system_command", "params": {"query": "brightness down"}, "confidence": 0.95}
+"WiFi band karo" -> {"action": "system_command", "params": {"query": "wifi off"}, "confidence": 0.95}
+"WiFi chalu karo" -> {"action": "system_command", "params": {"query": "wifi on"}, "confidence": 0.95}
+"internet ka status batao" -> {"action": "system_command", "params": {"query": "wifi status"}, "confidence": 0.9}
+"battery kitni hai" -> {"action": "system_command", "params": {"query": "battery"}, "confidence": 0.95}
+"charge kitna hai" -> {"action": "system_command", "params": {"query": "battery"}, "confidence": 0.9}
+"5 minute ka timer laga do" -> {"action": "system_command", "params": {"query": "timer 5"}, "confidence": 0.95}
+"10 minute mein remind karna" -> {"action": "system_command", "params": {"query": "timer 10"}, "confidence": 0.9}
+"chrome band karo" -> {"action": "system_command", "params": {"query": "close chrome"}, "confidence": 0.95}
+"notepad close karo" -> {"action": "system_command", "params": {"query": "close notepad"}, "confidence": 0.95}
+"vlc hatao" -> {"action": "system_command", "params": {"query": "close vlc"}, "confidence": 0.95}
+"screen lock karo" -> {"action": "system_command", "params": {"query": "lock"}, "confidence": 0.95}
+"laptop lock kar do" -> {"action": "system_command", "params": {"query": "lock"}, "confidence": 0.95}
+"shutdown karo" -> {"action": "system_command", "params": {"query": "shutdown"}, "confidence": 0.95}
+"restart karo" -> {"action": "system_command", "params": {"query": "restart"}, "confidence": 0.95}
+"sleep mode mein daal do" -> {"action": "system_command", "params": {"query": "sleep"}, "confidence": 0.95}
+
 Other examples:
 "Arijit Singh ka gaana chala do" -> {"action": "play_youtube", "params": {"query": "Arijit Singh best songs"}, "confidence": 0.95}
 "youtube khol do" -> {"action": "open_website", "params": {"query": "youtube.com"}, "confidence": 0.99}
 "calculator khol do" -> {"action": "open_app", "params": {"query": "calculator"}, "confidence": 0.99}
 "D drive khol do" -> {"action": "open_folder", "params": {"query": "D:\\\\"}, "confidence": 0.99}
-"screenshot lo" -> {"action": "system_command", "params": {"query": "screenshot"}, "confidence": 0.99}
 "kaisi ho tum" -> {"action": "none", "params": {}, "confidence": 1.0}
 
 Agar action nahi hai toh: {"action": "none", "params": {}, "confidence": 1.0}
@@ -147,33 +193,14 @@ SIRF JSON return karo -- koi explanation nahi.
 
 
 def _call_llm(user_message: str) -> str:
-    """Provider ke hisaab se LLM call karo."""
-    messages = [
-        {"role": "system", "content": INTENT_SYSTEM_PROMPT},
-        {"role": "user",   "content": user_message}
-    ]
-
-    if PROVIDER == "cerebras":
-        from cerebras.cloud.sdk import Cerebras
-        client = Cerebras(api_key=os.getenv("CEREBRAS_API_KEY"))
-        r = client.chat.completions.create(
-            model       = "llama3.1-8b",
-            messages    = messages,
-            temperature = 0.1,   # low temp = more deterministic intent
-            max_tokens  = 250,
-        )
-        return r.choices[0].message.content.strip()
-
-    else:  # groq default
-        from groq import Groq
-        client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        r = client.chat.completions.create(
-            model       = "llama-3.3-70b-versatile",
-            messages    = messages,
-            temperature = 0.1,
-            max_tokens  = 250,
-        )
-        return r.choices[0].message.content.strip()
+    """Central LLM client se intent detect karo — provider logic wahan hai."""
+    from core.llm_client import call_llm_simple
+    return call_llm_simple(
+        system_prompt=INTENT_SYSTEM_PROMPT,
+        user_message=user_message,
+        temperature=0.1,
+        max_tokens=250,
+    )
 
 
 def detect_intent(user_message: str) -> dict:

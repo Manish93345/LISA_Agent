@@ -1,17 +1,14 @@
 """
 LISA — Smart Memory Extractor
 ================================
-Conversation ke end mein ya beech mein Groq/Cerebras se
-automatically important facts aur incidents extract karta hai.
+Conversation ke end mein ya beech mein automatically important facts
+aur incidents extract karta hai.
 
+Centralized LLM client use karta hai — provider logic llm_client.py mein hai.
 Ye agent.py call karega — manually kuch nahi karna.
 """
 
 import json
-from config.settings import (
-    LLM_PROVIDER, INTENT_MODEL,
-    GROQ_API_KEY, CEREBRAS_API_KEY
-)
 from memory.long_term import save_memory, save_session_summary
 
 EXTRACT_PROMPT = """
@@ -45,26 +42,17 @@ Rules:
 
 
 def _call_llm(conversation_text: str) -> dict:
-    messages = [
-        {"role": "system", "content": EXTRACT_PROMPT},
-        {"role": "user",   "content": f"Ye conversation hai:\n\n{conversation_text}"}
-    ]
+    """Central LLM client se memory extract karo."""
+    from core.llm_client import call_llm_simple
 
     try:
-        if LLM_PROVIDER == "cerebras":
-            from cerebras.cloud.sdk import Cerebras
-            r = Cerebras(api_key=CEREBRAS_API_KEY).chat.completions.create(
-                model=INTENT_MODEL, messages=messages,
-                temperature=0.1, max_tokens=400
-            )
-        else:
-            from groq import Groq
-            r = Groq(api_key=GROQ_API_KEY).chat.completions.create(
-                model=INTENT_MODEL, messages=messages,
-                temperature=0.1, max_tokens=400
-            )
+        raw = call_llm_simple(
+            system_prompt=EXTRACT_PROMPT,
+            user_message=f"Ye conversation hai:\n\n{conversation_text}",
+            temperature=0.1,
+            max_tokens=400,
+        )
 
-        raw = r.choices[0].message.content.strip()
         if "```" in raw:
             raw = raw.split("```")[1].lstrip("json").strip()
         return json.loads(raw)
